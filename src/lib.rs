@@ -1,32 +1,47 @@
-//! `ckmg`: key management for the member vault.
+//! Community-local key custody for the member vault.
 //!
-//! - **Hierarchy:** member root → device key → purpose keys ([`KeyRing`]). Root and
-//!   device secrets never leave the ring; purpose keys ([`Purpose`]) derive one-way and
-//!   are the only secrets that may be delegated to engines (Veilid, OpenMLS, Arti).
-//! - **Format:** Veilid's VLD0 cryptosystem and typed keys (`VLD0:<base64url>`), built
-//!   from the crates Veilid uses (ed25519-dalek, x25519-dalek, hpke with
-//!   chacha20poly1305, blake3). Keys and signatures made here are valid Veilid keys and
-//!   signatures, so purpose keys can own and write Veilid DHT records directly.
-//! - **Operations:** sign, verify, seal to a device, open, certify a purpose key
-//!   ([`Delegation`]), pairing (seal the root to a new device) and root rotation.
-//! - **Passkeys** ([`passkey`]): WebAuthn registration and login signing, and the PRF
-//!   secret that becomes the `cwst` store password.
+//! [`Keys`] owns a root, independent device key, purpose capabilities, signed lineage,
+//! pairing, atomic rotation and passkey-PRF restoration. [`SecureStore`], [`Clock`],
+//! [`Entropy`] and [`Authority`] are injected. No networking or filesystem adapter is
+//! built in. Root and device secrets have no public getter or plaintext serialization.
 //!
-//! `ckmg` holds no policy: `cvlt` decides who may request which operation, when pairing
-//! is allowed, and when the root rotates. There is no export, backup or recovery path.
+//! Owner transcripts retain their exact bytes: [`Keys::sign`] is Veilid VLD0
+//! Ed25519ph with context `VLD0_SIGN`; [`Keys::sign_ed25519`] serves plain-Ed25519
+//! formats. A [`KeyCertificate`] binds the purpose key to community, pseudonym, device
+//! and epoch. Consumers must verify it against authenticated current [`Lineage`].
+//!
+//! See `docs/CONTRACT.md`, `docs/CONSTRUCTIONS.md` and `docs/SECURITY-REVIEW.md`.
+//! Cryptographic custody is not proof of community membership or current eligibility.
 
 mod error;
 mod keyring;
+mod keys;
+mod lineage;
 pub mod passkey;
+mod ports;
 mod purpose;
 mod typed;
 mod vld0;
 
 pub use error::Error;
-pub use keyring::{KeyRef, KeyRing, RingKey};
-pub use purpose::{DelegatedKey, DelegatedSecret, Delegation, MAX_LABEL_BYTES, Purpose, Scope};
+pub use keys::{Change, DeviceInfo, KeyHandle, Keys, OperationId, Receipt, RestoreRoot, State};
+pub use lineage::{
+    Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
+};
+pub use ports::{
+    Action, Authority, Authorization, Clock, Commit, Entropy, Locator, MAX_CHECKPOINT_BYTES,
+    MAX_DEVICES, MAX_MESSAGE_BYTES, SecureStore, SystemEntropy,
+};
+pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
 pub use typed::{BEST_KIND, CryptoKind, HashDigest, PublicKey, Signature, VLD0};
-pub use vld0::{hash, seal_to, validate_public_key, verify, verify_ed25519};
+pub use vld0::{hash, validate_public_key, verify, verify_ed25519};
 
-/// A 32-byte secret that is wiped on drop.
+/// Secret material is wiped on drop; never serialized outside encrypted checkpoints.
 pub(crate) type Secret = zeroize::Zeroizing<[u8; 32]>;
+
+#[cfg(target_arch = "wasm32")]
+#[cfg(test)]
+wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
+
+#[cfg(test)]
+mod veilid_reference_tests;

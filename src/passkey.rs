@@ -1,77 +1,168 @@
-//! Passkeys: the top unlock factor of the vault and the member's login signature.
+//! Deterministic custody from an opaque, high-entropy PRF secret.
 //!
-//! - **Unlock:** the WebAuthn PRF extension returns a secret that only the authenticator
-//!   can produce for this credential. [`store_password`] turns it (HKDF-SHA256) into the
-//!   password that protects the `cwst` device encryption key.
-//! - **Login:** the authenticator signs a login challenge from `cvld` (a WebAuthn
-//!   assertion). The vault only produces the [`Assertion`]; the facade sends it and `cpky`
-//!   verifies it on the server.
-//! - **Registration:** on a member's first device and during pairing (rules in `cvlt`).
-//!
-//! WebAuthn works only in window contexts, never in workers; the browser half
-//! ([`browser`]) therefore runs in the vault's own cross-origin iframe. Everything in
-//! this module outside [`browser`] is plain data and pure functions, usable and tested
-//! on every target.
+//! Device-side cpky Passkeys acquires the secret; server-side ckyh Keyhole verifies
+//! authentication. This module has no WebAuthn adapter, options, credential IDs or
+//! PRF-input salt. Keys cannot tell which authenticator produced the input.
+//! Every derivation is specified in docs/CONSTRUCTIONS.md.
 
-use crate::{Error, RingKey};
+use crate::{Error, Locator, Secret};
 use hkdf::Hkdf;
-use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 use zeroize::Zeroizing;
-
-#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
-pub mod browser;
-
-/// COSE algorithm identifiers offered at registration, in order of preference:
-/// EdDSA, ES256, RS256.
-pub const COSE_ALGORITHMS: [i32; 3] = [-8, -7, -257];
 
 const HKDF_SALT: &[u8] = b"ckmg.passkey-prf.v1";
 const STORE_PASSWORD_INFO: &[u8] = b"ckmg.cwst-password.v1\0";
 const RING_KEY_INFO: &[u8] = b"ckmg.keyring-key.v1\0";
+const LOCATION_INFO: &[u8] = b"ckmg.vault-location.v1\0";
+const IDENTITY_INFO: &[u8] = b"ckmg.identity-root.v1\0";
+const HOLDER_INFO: &[u8] = b"ckmg.passport-holder-seed.v1\0";
+const DEVICE_INFO: &[u8] = b"ckmg.device-lineage-seed.v1\0";
+const LINEAGE_INFO: &[u8] = b"ckmg.member-lineage-seed.v1\0";
 
-/// The PRF input ("salt") the vault evaluates for store unlock. Fixed, so every login on
-/// every authenticator holding the credential yields the same secret.
-pub fn unlock_prf_input() -> [u8; 32] {
-    blake3::derive_key(
-        "ckmg 2026-09 passkey PRF input for vault store unlock v1",
-        b"",
-    )
-}
-
-/// A PRF result from the authenticator. Wiped on drop.
+/// Opaque 32-byte input from device-side Passkeys. Wiped on drop; no Debug,
+/// serialization, cloning or byte getter. This is not evidence of authentication.
+///
+/// ```compile_fail
+/// let input = ckmg::passkey::PrfOutput::from_bytes(&[1; 32]).unwrap();
+/// println!("{input:?}");
+/// ```
 pub struct PrfOutput(Zeroizing<[u8; 32]>);
 
 impl PrfOutput {
     /// Wrap the 32-byte `results.first` value of the PRF extension.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let array: [u8; 32] = bytes.try_into().map_err(|_| Error::Encoding)?;
-        Ok(Self(Zeroizing::new(array)))
+        Ok(Self(crate::keyring::secret(bytes)?))
     }
 }
 
-impl std::fmt::Debug for PrfOutput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("PrfOutput([redacted])")
+/// Stable identity custody for a separately selected wallet domain. Never send this
+/// capability or its public identity key to community services as a member ID.
+/// The holder seed stays private pending an upstream passport-engine integration;
+/// deriving it is not passport issuance or proof of membership.
+pub struct IdentityRoots {
+    domain: String,
+    identity: Secret,
+    // Reserved for the upstream holder engine, never exposed as bytes or an RNG.
+    passport_holder_seed: Secret,
+}
+
+impl IdentityRoots {
+    /// Public identity verification key; independent of device/lineage rotations.
+    pub fn public_key(&self) -> crate::PublicKey {
+        crate::vld0::public_key(&self.identity)
+    }
+
+    /// Sign a bounded identity-possession challenge with a dedicated domain.
+    /// This does not authorize a community action or manufacture a passport.
+    pub fn prove_possession(&self, challenge: &[u8]) -> Result<crate::Signature, Error> {
+        crate::vld0::sign(&self.identity, &self.proof_transcript(challenge)?)
+    }
+
+    /// Canonical identity-possession transcript for independent verification.
+    pub fn proof_transcript(&self, challenge: &[u8]) -> Result<Vec<u8>, Error> {
+        if challenge.len() > 4096 {
+            return Err(Error::Limit);
+        }
+        crate::lineage::encode(b"ckmg.identity.proof.v1\0", &(&self.domain, challenge))
     }
 }
 
-/// Derive the `cwst` store password from the PRF output. `store` names the store (one
-/// per community vault), so one passkey can unlock several stores without sharing a
-/// password between them.
-pub fn store_password(prf: &PrfOutput, store: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
-    expand(prf, STORE_PASSWORD_INFO, store)
+impl Drop for IdentityRoots {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        self.identity.zeroize();
+        self.passport_holder_seed.zeroize();
+    }
+}
+crate::lineage::redacted!(IdentityRoots);
+
+/// Reconstruct identity root and passport holder secret seed without storage or
+/// randomness. The wallet domain must be stable and isolated from community custody.
+/// Passport credentials themselves still need issuer renewal if their data is lost.
+pub fn identity_roots(prf: &PrfOutput, wallet_domain: &str) -> Result<IdentityRoots, Error> {
+    let identity = expand(prf, IDENTITY_INFO, wallet_domain)?;
+    let passport_holder_seed = expand(prf, HOLDER_INFO, wallet_domain)?;
+    Ok(IdentityRoots {
+        domain: wallet_domain.into(),
+        identity,
+        passport_holder_seed,
+    })
 }
 
-/// Derive the key that seals the [`KeyRing`](crate::KeyRing) at rest. Independent of the
-/// store password (different HKDF info), so the ring stays sealed even to code that can
+pub(crate) fn device_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Error> {
+    expand(prf, DEVICE_INFO, community)
+}
+
+pub(crate) fn lineage_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Error> {
+    expand(prf, LINEAGE_INFO, community)
+}
+
+pub(crate) fn lineage_root(seed: &Secret, epoch: u64) -> Result<Secret, Error> {
+    if epoch == 0 {
+        return Err(Error::Encoding);
+    }
+    let mut root = Zeroizing::new([0; 32]);
+    Hkdf::<Sha256>::new(Some(b"ckmg.lineage-root.v1"), seed.as_slice())
+        .expand(&epoch.to_be_bytes(), root.as_mut())
+        .map_err(|_| Error::Crypto)?;
+    Ok(root)
+}
+
+/// Opaque wrapping capability for storage adapters. Uses an independent HKDF label
+/// from key-ring encryption, so it cannot decrypt ckmg's custody checkpoints.
+pub struct StoreCipher(Secret);
+
+impl StoreCipher {
+    /// Wrap a bounded storage secret or record with authenticated owner context.
+    pub fn seal(
+        &self,
+        rng: &mut impl crate::Entropy,
+        context: &[u8],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, Error> {
+        if context.len() > 4096 || plaintext.len() > crate::MAX_MESSAGE_BYTES {
+            return Err(Error::Limit);
+        }
+        crate::keyring::seal(rng, &self.0, &store_context(context), plaintext)
+    }
+    /// Open data from this storage capability; no raw wrapping key is exposed.
+    pub fn open(&self, context: &[u8], sealed: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+        if context.len() > 4096 || sealed.len() > crate::MAX_MESSAGE_BYTES + 40 {
+            return Err(Error::Limit);
+        }
+        crate::keyring::open(&self.0, &store_context(context), sealed)
+    }
+}
+crate::lineage::redacted!(StoreCipher);
+
+fn store_context(context: &[u8]) -> Vec<u8> {
+    let mut aad = b"ckmg.storage.wrap.v1\0".to_vec();
+    aad.extend_from_slice(context);
+    aad
+}
+
+/// Derive an opaque storage-wrapping capability, separate from the vault locator and
+/// custody key. The adapter may wrap its own data key without obtaining our key.
+pub fn store_cipher(prf: &PrfOutput, community: &str) -> Result<StoreCipher, Error> {
+    Ok(StoreCipher(expand(prf, STORE_PASSWORD_INFO, community)?))
+}
+
+/// Derive the key that seals the private key material at rest. Independent of the
+/// storage capability (different HKDF info), so the ring stays sealed even to code that can
 /// read the store.
-pub fn ring_key(prf: &PrfOutput, store: &str) -> Result<RingKey, Error> {
-    Ok(RingKey(expand(prf, RING_KEY_INFO, store)?))
+pub(crate) fn ring_key(prf: &PrfOutput, store: &str) -> Result<Secret, Error> {
+    expand(prf, RING_KEY_INFO, store)
+}
+
+/// Derive the stable community-local vault locator from the authenticator PRF.
+/// The same synced credential locates the same logical device. This is not a
+/// membership identity, and does not guarantee that a network retains its record.
+pub fn vault_location(prf: &PrfOutput, community: &str) -> Result<Locator, Error> {
+    Ok(Locator(*expand(prf, LOCATION_INFO, community)?))
 }
 
 fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
-    if store.is_empty() || store.len() > 256 {
+    if store.is_empty() || store.len() > 256 || store.chars().any(char::is_control) {
         return Err(Error::Encoding);
     }
     let mut info = Vec::with_capacity(label.len() + store.len());
@@ -84,102 +175,103 @@ fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 3
     Ok(out)
 }
 
-/// Relying party (the community's base domain).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RelyingParty {
-    /// RP ID, for example `example.org`; the vault iframe on `vault.example.org` may use it.
-    pub id: String,
-    /// Human-readable name.
-    pub name: String,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Registration request: create a discoverable, user-verified passkey with PRF.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct RegistrationRequest {
-    /// Relying party.
-    pub rp: RelyingParty,
-    /// Opaque user handle (random, never the member id in clear).
-    pub user_id: Vec<u8>,
-    /// Account name shown by the authenticator.
-    pub user_name: String,
-    /// Display name shown by the authenticator.
-    pub user_display_name: String,
-    /// Server challenge (from `cvld`/`cpky`).
-    pub challenge: Vec<u8>,
-    /// Credentials the authenticator must not already hold.
-    pub exclude_credentials: Vec<Vec<u8>>,
-    /// Timeout in milliseconds.
-    pub timeout_ms: u32,
-}
-
-/// Login request: sign `challenge` with one of `allow_credentials` (empty: any
-/// discoverable credential for the RP) and evaluate the unlock PRF.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct LoginRequest {
-    /// RP ID.
-    pub rp_id: String,
-    /// Server challenge (from `cvld`/`cpky`).
-    pub challenge: Vec<u8>,
-    /// Acceptable credential ids.
-    pub allow_credentials: Vec<Vec<u8>>,
-    /// Timeout in milliseconds.
-    pub timeout_ms: u32,
-}
-
-/// A new credential, for `cpky` to verify and store on the server.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Registration {
-    /// Credential id (`rawId`).
-    pub credential_id: Vec<u8>,
-    /// `response.clientDataJSON`.
-    pub client_data_json: Vec<u8>,
-    /// `response.attestationObject`.
-    pub attestation_object: Vec<u8>,
-    /// Whether the authenticator reported PRF support.
-    pub prf_enabled: bool,
-}
-
-/// A login signature (WebAuthn assertion), for `cpky` to verify.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Assertion {
-    /// Credential id (`rawId`).
-    pub credential_id: Vec<u8>,
-    /// `response.clientDataJSON`.
-    pub client_data_json: Vec<u8>,
-    /// `response.authenticatorData`.
-    pub authenticator_data: Vec<u8>,
-    /// `response.signature`.
-    pub signature: Vec<u8>,
-    /// `response.userHandle`, when the authenticator returned one.
-    pub user_handle: Option<Vec<u8>>,
-}
-
-impl RegistrationRequest {
-    /// Basic shape checks before calling the authenticator.
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.rp.id.is_empty()
-            || self.user_id.is_empty()
-            || self.user_id.len() > 64
-            || self.challenge.len() < 16
-            || self.user_name.is_empty()
-        {
-            return Err(Error::Encoding);
-        }
-        Ok(())
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn hkdf_derivation_matches_independent_hmac_vectors() {
+        // Independently evaluated from RFC 5869 Extract + one Expand block (L=32).
+        let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+        let hex = |bytes: &[u8]| data_encoding::HEXLOWER.encode(bytes);
+        assert_eq!(
+            hex(vault_location(&prf, "a").unwrap().as_bytes()),
+            "c5086bf525ec6e443a5a0592e044e1d0fdfcde4b7d8d0c6195b3565fcc02690a"
+        );
+        assert_eq!(
+            hex(ring_key(&prf, "a").unwrap().as_slice()),
+            "1f267040dddfa9cbf9d26075ae78d90ff69a5a1fc98d7242a30ae770b0db6b64"
+        );
+        assert_eq!(
+            hex(store_cipher(&prf, "a").unwrap().0.as_slice()),
+            "767cc54cee7a526522277a226fa0aeb6671f2040a9fc768743f1820b9a88ab4b"
+        );
+        let roots = identity_roots(&prf, "a").unwrap();
+        assert_eq!(
+            hex(roots.identity.as_slice()),
+            "305fd593f6b34de15c321bd2daddf61034fd5185347d68d2d4bfcae20dc2e740"
+        );
+        assert_eq!(
+            hex(roots.passport_holder_seed.as_slice()),
+            "fb89d2196c2d2f07a23f69c7b3f6d919a10f71e8609bc211eaf0000f0050c68f"
+        );
+        assert_eq!(
+            hex(device_seed(&prf, "a").unwrap().as_slice()),
+            "cda24928113648d6cd3dc9f1d83e96cae9cb91d29491e4a75d7c9b61dfefba0f"
+        );
+        let seed = lineage_seed(&prf, "a").unwrap();
+        assert_eq!(
+            hex(seed.as_slice()),
+            "7c7b50366ada27df5c5bbf1519e0523fa92dfd7b2197abe488918e3ee4b1cd44"
+        );
+        assert_eq!(
+            hex(lineage_root(&seed, 1).unwrap().as_slice()),
+            "ab89538e361da6c46348c22a983be09ba3f078f7e4152c797d6857c89ecc3d0f"
+        );
     }
-}
 
-impl LoginRequest {
-    /// Basic shape checks before calling the authenticator.
-    pub fn validate(&self) -> Result<(), Error> {
-        if self.rp_id.is_empty() || self.challenge.len() < 16 {
-            return Err(Error::Encoding);
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn all_roots_restore_without_storage_and_separate_domains() {
+        let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+        let other = PrfOutput::from_bytes(&[28; 32]).unwrap();
+        let a = identity_roots(&prf, "a").unwrap();
+        let restored = identity_roots(&prf, "a").unwrap();
+        assert_eq!(a.identity, restored.identity);
+        assert_eq!(a.passport_holder_seed, restored.passport_holder_seed);
+        for different in [
+            identity_roots(&prf, "b").unwrap(),
+            identity_roots(&other, "a").unwrap(),
+        ] {
+            assert_ne!(a.identity, different.identity);
+            assert_ne!(a.passport_holder_seed, different.passport_holder_seed);
         }
-        Ok(())
+        let seed = lineage_seed(&prf, "a").unwrap();
+        let branches = [
+            a.identity.clone(),
+            a.passport_holder_seed.clone(),
+            device_seed(&prf, "a").unwrap(),
+            seed.clone(),
+            lineage_root(&seed, 1).unwrap(),
+            lineage_root(&seed, 2).unwrap(),
+            ring_key(&prf, "a").unwrap(),
+            store_cipher(&prf, "a").unwrap().0,
+        ];
+        for (i, value) in branches.iter().enumerate() {
+            for other in &branches[i + 1..] {
+                assert_ne!(value, other);
+            }
+        }
+        let signature = a.prove_possession(b"challenge").unwrap();
+        crate::verify(
+            &restored.public_key(),
+            &restored.proof_transcript(b"challenge").unwrap(),
+            &signature,
+        )
+        .unwrap();
+        assert!(
+            crate::verify(
+                &restored.public_key(),
+                &restored.proof_transcript(b"other").unwrap(),
+                &signature
+            )
+            .is_err()
+        );
+        assert!(lineage_root(&seed, 0).is_err());
+        for domain in ["", "bad\0domain", &"a".repeat(257)] {
+            assert!(identity_roots(&prf, domain).is_err());
+            assert!(vault_location(&prf, domain).is_err());
+        }
     }
 }

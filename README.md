@@ -1,74 +1,66 @@
-# ckmg
+# ckmg — Keys
 
-**Keys of the member vault: root → device → purpose, in Veilid's VLD0 format.**
+Keys is the cryptographic custody library of the member vault (`cvlt`). It derives
+stable secrets from an opaque passkey PRF input, holds root/device/purpose keys,
+signs and seals, pairs devices, and commits root rotations atomically. Native and
+wasm32 use the same Rust implementation and crypto tests.
 
-`ckmg` is the key drawer of the vault (`cvlt`). It holds the member root and the device
-key, derives purpose keys, signs, verifies, seals and opens, and turns the passkey PRF
-into the secrets that unlock the vault. It uses the crypto crates Veilid uses
-(ed25519-dalek, hpke with X25519 and ChaCha20-Poly1305, chacha20poly1305, blake3) and
-Veilid's VLD0 semantics and typed-key format, but not `veilid-core` (one Veilid stack
-only).
+The **passkey is the key**. Device-side **cpky Passkeys** is the only library that
+talks to WebAuthn. Server-side **ckyh Keyhole** stores the public credential and
+verifies authentication. Keys never constructs WebAuthn options or handles RP IDs,
+challenges, assertions or credential responses. See the [adapter move](docs/PASSKEYS.md).
 
-## Hierarchy
+## Custody and restoration
 
-| Key | Where it lives | Leaves the vault? |
-|---|---|---|
-| Member root | every device of the member | only sealed to a new device during pairing, from a live device |
-| Device key | one device | never |
-| Purpose key (member scope) | derived from the root | yes, delegated narrowly (e.g. a record writer, the member's record encryption key) |
-| Purpose key (device scope) | derived from the device key | yes, delegated narrowly (e.g. OpenMLS signature key, onion service key) |
+`passkey::PrfOutput::from_bytes` accepts exactly 32 bytes from a trusted local
+adapter. It has no byte getter, Debug implementation or serialization. Independent
+HKDF domains derive the vault locator, custody key, opaque `StoreCipher`, identity
+root, passport holder secret seed, device seed and member-lineage seed. Root epochs
+are derived from the credential-local lineage seed. Nonces, pairing challenges,
+session IDs and operation IDs still require secure randomness.
 
-Purpose keys derive one-way (BLAKE3 key derivation over parent, label and version), so a
-delegated key never exposes its parent and compromising it affects only its purpose.
-Rotation = next version. A [`Delegation`](src/purpose.rs) is the parent's signed statement
-that a public key serves a purpose until a given time.
+`Keys<S, C, R, A>` receives storage, clock, entropy and current-authority ports.
+`create_scope` requires explicit registration authority. `unlock` opens an existing
+checkpoint. If storage authoritatively reports absence, `restore_scope` can rebuild
+the same keys against authenticated current lineage, without changing the member
+binding. An unreachable store is an error, never permission to create an identity.
 
-## Formats (Veilid VLD0)
+The same synced passkey represents the same logical device. Rebuilding its initial
+custody needs no old vault ciphertext. A separate passkey paired into a shared root,
+or a survivor of another credential's rotation, needs its retained authenticated
+root envelope. The vault integration must retain those transfers with authority
+metadata independently of disposable content. See [restoration boundaries](docs/CONTRACT.md#restoration-boundaries).
 
-- Typed keys: `VLD0:<base64url>` as text, `VLD0 ‖ bytes` as binary.
-- Signatures: Ed25519ph with context `VLD0_SIGN` (tested against a direct
-  ed25519-dalek signature), so purpose keys can own and write Veilid DHT records.
-- Sealing to a key: HPKE (RFC 9180) DHKEM(X25519, HKDF-SHA256), HKDF-SHA256,
-  ChaCha20-Poly1305, with Veilid's Ed25519 → X25519 conversion.
-- `verify_ed25519`: plain Ed25519 for statements others sign without VLD0 (e.g. `cvld`
-  admission grants).
-- Migration hook: `KeyRing::migrate`; only VLD0 exists, so it accepts only VLD0 for now.
+`passkey::identity_roots` independently restores stable wallet identity custody and
+the passport holder seed without records. The seed remains internal: connecting it
+to the existing passport engine without an export API is a downstream integration
+gate, not an implemented credential issuance or membership-renewal flow. Lost
+contacts/history cannot be recreated from keys; available encrypted data remains
+readable with the same keys.
 
-## Passkeys
+## Cryptographic operations
 
-`passkey` (window context only; WebAuthn is unavailable in workers, hence the vault
-iframe):
+- Opaque `KeyHandle` capabilities bind purpose, community/member, device and epoch.
+  Operations recheck current authority; locking and rotation invalidate old handles.
+- VLD0 uses typed `VLD0:<base64url-no-pad>` keys, Ed25519ph with `VLD0_SIGN`,
+  Veilid-compatible HPKE and BLAKE3. Plain Ed25519 has a separate API.
+- XChaCha20-Poly1305 protects custody, purpose data and storage wrapping. `cwst`
+  receives only `StoreCipher`, never a PRF or raw wrapping key.
+- Pairing and rotation expose signed public metadata and recipient-bound encrypted
+  roots only. No secret getter, plaintext key serialization, operator recovery,
+  backup service, network or filesystem implementation is included.
 
-- `browser::register`: create a discoverable, user-verified passkey with the PRF extension;
-  returns the registration for `cpky` (server) to verify.
-- `browser::login`: sign a login challenge from `cvld` (WebAuthn assertion) and evaluate
-  the PRF; `browser::unlock` requires the PRF.
-- `store_password`: HKDF-SHA256(PRF) → the `cwst` store password.
-- `ring_key`: HKDF-SHA256(PRF, other info) → the key that seals the key ring at rest.
+Every construction and domain label is specified in [CONSTRUCTIONS](docs/CONSTRUCTIONS.md).
+The [contract](docs/CONTRACT.md) covers authority and crash behavior.
+[SECURITY-REVIEW](docs/SECURITY-REVIEW.md) lists the independent review and integration
+checks required before production use. Test vectors are evidence, not an audit.
 
-## Storage
+## Validation
 
-`ckmg` does no I/O. `KeyRing::seal_at_rest` returns the ring encrypted under the
-PRF-derived `RingKey`; `cvlt` stores that blob in its `cwst` drawer. The ring is therefore
-sealed twice at rest, and even code that can read the store cannot read ring secrets
-without the passkey. (This also keeps `ckmg` free of private dependencies, so its CI runs
-on hosted runners.)
-
-## Boundaries
-
-- No policy: `cvlt` decides who may call what, when pairing and root rotation happen.
-- No export of root or device secrets; no backup; no recovery (invariant 6).
-- No network code.
-- Don't build primitives: only composition of upstream crates.
-
-## Open points / TODO
-
-- The architecture's cmsg table places the browser passkey half "inside `cvlt`"; the
-  overnight brief placed it here. It lives in `ckmg::passkey` (a module cvlt drives);
-  moving it is mechanical if Julian prefers `cvlt`.
-- `passkey::browser` is type-checked for wasm32 in CI but not exercised: needs a
-  headless-browser test with a virtual authenticator (queued vault prototype).
-- VLD1 (Veilid's next cryptosystem) is not supported yet; `migrate` is the hook.
+GitHub Actions runs formatting, native Clippy/tests, wasm32 Clippy, and the shared
+crypto/state suite in headless Chrome. Dependencies are recorded in `Cargo.lock`.
+No local workstation builds are required. Veilid reference tests remain isolated
+under MPL-2.0; production depends on upstream crypto crates, never `veilid-core`.
 
 ## License
 

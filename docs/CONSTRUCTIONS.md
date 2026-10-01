@@ -1,0 +1,143 @@
+# Cryptographic constructions
+
+This is a reviewable specification of ckmg's composition, not a security audit.
+All primitives come from upstream crates. Application domain labels and custody
+transcripts below are ckmg protocol choices and require independent review.
+
+## PRF derivation (src/passkey.rs)
+
+Use RustCrypto `hkdf`/`sha2` implementing [HKDF, RFC 5869](https://www.rfc-editor.org/rfc/rfc5869.html).
+For every first-level output, IKM is the 32-byte opaque PRF secret, salt is the exact
+ASCII bytes `ckmg.passkey-prf.v1`, L = 32, and info is `label || UTF8(domain)`.
+Each label ends with one zero byte. Domains are nonempty, at most 256 UTF-8 bytes,
+and contain no control characters. They are byte-exact identifiers, not normalized
+URLs; the owner must pin their canonical spelling. No entropy or mutable metadata
+enters these derivations.
+
+| Output | Label (the spelling `\0` means one zero byte) |
+|---|---|
+| Private vault locator | `ckmg.vault-location.v1\0` |
+| Custody encryption key | `ckmg.keyring-key.v1\0` |
+| Opaque cwst wrapping key | `ckmg.cwst-password.v1\0` (historical label; no password API) |
+| Stable wallet identity Ed25519 seed | `ckmg.identity-root.v1\0` |
+| Passport holder secret seed | `ckmg.passport-holder-seed.v1\0` |
+| Logical device Ed25519 seed | `ckmg.device-lineage-seed.v1\0` |
+| Credential-local lineage seed | `ckmg.member-lineage-seed.v1\0` |
+
+A lineage root for epoch E (E >= 1) uses another HKDF-SHA256: IKM = lineage seed,
+salt = `ckmg.lineage-root.v1`, info = E as exactly eight big-endian bytes, L = 32.
+The result is an Ed25519 seed. The lineage seed never travels in pairing or rotation
+envelopes. A removed *different* credential therefore does not learn future roots
+from a previously shared root. Compromise of the same PRF compromises every epoch
+that credential can derive; this is not forward secrecy.
+
+Wallet roots are independent of all community key epochs. The passport output is
+an opaque seed, not a BBS scalar or credential. No seed-to-scalar mapping, proof or
+issuance primitive is invented here; that integration must use the existing
+passport engine and keep its private scalar inside custody.
+
+The fixed vectors in `src/passkey.rs` were independently evaluated with Node's
+OpenSSL-backed `crypto.hkdfSync`; `tests/fixtures/prf-vectors.mjs` reproduces them.
+Synthetic input is 32 copies of byte 27 and domain `a`.
+
+## Signatures, typed values and hashes (src/vld0.rs, src/typed.rs)
+
+[Ed25519, RFC 8032](https://www.rfc-editor.org/rfc/rfc8032.html) is implemented by
+[ed25519-dalek](https://docs.rs/ed25519-dalek/latest/ed25519_dalek/).
+VLD0 prehashes the exact message with SHA-512 and uses Ed25519ph context `VLD0_SIGN`.
+Plain Ed25519 has separate signing/verification APIs and is never relabeled VLD0.
+Verification uses dalek's strict methods and rejects weak public keys.
+
+Public keys, signatures and hashes encode as `VLD0:` plus unpadded base64url, or
+four bytes `VLD0` plus the fixed-size value. Hashes and ciphertext CAS stamps use
+unkeyed [BLAKE3](https://github.com/BLAKE3-team/BLAKE3). They authenticate nothing
+by themselves. The independently authenticated lineage supplies authority.
+
+## Purpose derivation (src/keys.rs)
+
+Use upstream [BLAKE3 derive_key](https://docs.rs/blake3/latest/blake3/fn.derive_key.html),
+with context `ckmg 2026-10 purpose signing v1` or
+`ckmg 2026-10 purpose encryption v1`. Key material is the 32-byte parent seed followed
+by the purpose-context transcript with empty caller context. The parent is the
+member root or local device seed according to Scope. Signing/encryption keys are
+separate; purpose label, generation, member binding and epoch are bound below.
+No root or device seed is delegated through a public getter.
+
+## Symmetric encryption (src/keyring.rs)
+
+RustCrypto [chacha20poly1305](https://docs.rs/chacha20poly1305/latest/chacha20poly1305/)
+provides XChaCha20-Poly1305 (32-byte key, 24-byte random nonce, 16-byte tag).
+XChaCha is the upstream construction, not the 12-byte-nonce cipher in RFC 8439.
+Every seal obtains a fresh nonce from injected CSPRNG entropy and outputs
+`nonce || ciphertext+tag`. AAD is never encrypted but must match exactly.
+
+| Use | Header / AAD |
+|---|---|
+| Checkpoint | Output header `ckmg.checkpoint.v1\0`; AAD = header + 32-byte locator |
+| Purpose data | Output header `ckmg.purpose.sealed.v1\0`; AAD = purpose-context transcript including caller context |
+| cwst wrapping | No outer header; AAD = `ckmg.storage.wrap.v1\0` + bounded caller context |
+
+Checkpoint plaintext is LE-u32 metadata length, metadata JSON, root-present byte,
+32-byte device seed, and optional 32-byte shared-root seed. Identity/holder and local
+lineage seeds are rederived; they are not serialized in checkpoints or transfers.
+The encrypted metadata includes revision, clock floor and exact pending receipt.
+Secret byte buffers use `Zeroizing`; the memory-erasure limits still need review.
+
+## Root transport (src/vld0.rs)
+
+Use `hpke` [RFC 9180](https://www.rfc-editor.org/rfc/rfc9180.html) base mode,
+DHKEM(X25519, HKDF-SHA256), HKDF-SHA256, ChaCha20-Poly1305. Upstream dalek converts
+the Ed25519 public key to Montgomery form. SHA-512(seed)'s first 32 bytes provide
+the corresponding private input, with clamping left to upstream X25519.
+Info is exactly `veilid-hpke/1VLD0`; output is `0x01 || VLD0 || enc[32] || ciphertext+tag`.
+A root transfer contains a 32-byte seed, making its total size 85 bytes.
+
+Base mode does not authenticate the sender. Pairing/rotation signatures plus
+independent current authority supply that authentication. AAD binds the exact
+recipient and transition as listed below. HPKE entropy uses upstream ChaCha20Rng
+seeded with 32 fresh bytes from the injected entropy port.
+
+The selected semantics follow [Veilid revision dd8e2cdd72b5bf817172ac31c20872b168c5c8fc](https://gitlab.com/veilid/veilid/-/tree/dd8e2cdd72b5bf817172ac31c20872b168c5c8fc),
+`veilid-core-optimized/src/{sign,seal}.rs` and
+`veilid-core/src/crypto/crypto_system/hpke.rs`. Test-only copied/adapted code is
+isolated in `src/veilid_reference_tests.rs` under MPL-2.0. The RFC 9180 A.2.1 fixture
+is byte-identical to Veilid's fixture at that revision. These are composition/vector
+checks, not a live Veilid integration test or independent implementation audit.
+
+## Owned transcripts (src/lineage.rs, src/keys.rs, src/passkey.rs)
+
+Encoding is domain bytes followed by serde_json's compact serialization of the
+listed tuple, in fixed order. Struct fields follow declaration order. Byte arrays
+are JSON integer arrays; typed public values use their serde encoding. No maps,
+floats or transport JSON text are signed. Changes require a new format version.
+
+| Domain | Tuple / value |
+|---|---|
+| `ckmg.lineage.v1\0` | version, binding, epoch, revision, root, sorted devices |
+| `ckmg.lineage.digest.v1\0` | complete Lineage, BLAKE3 hashed |
+| `ckmg.pairing.request.v1\0` | version, binding, root, epoch, device, nonce, issued_at, expires_at |
+| `ckmg.pairing.digest.v1\0` | complete PairingRequest, BLAKE3 hashed |
+| `ckmg.pairing.root.v2\0` | request digest, granted lineage digest (HPKE AAD) |
+| `ckmg.pairing.grant.v1\0` | request, lineage, sealed_root |
+| `ckmg.rotation.root.v1\0` | predecessor digest, previous root, revoked device, successor digest, recipient (HPKE AAD) |
+| `ckmg.rotation.v1\0` | predecessor, previous_root, revoked, lineage, envelopes |
+| `ckmg.rotation.digest.v1\0` | complete Rotation, BLAKE3 hashed |
+| `ckmg.purpose.certificate.v1\0` | binding, epoch, device, purpose, key |
+| `ckmg.purpose.context.v1\0` | binding, epoch, device-or-null, purpose, caller context |
+| `ckmg.identity.proof.v1\0` | wallet domain, challenge bytes |
+
+Lineage and pairing grants use the member-root signature; pairing requests and
+purpose certificates use the device signature. Rotation uses the previous root
+signature plus the new lineage's self-signature. Identity proofs use the isolated
+identity root. Owner payload signatures remain the owner's exact bytes, checked
+with a separately validated purpose certificate.
+
+## Entropy and secret lifetime
+
+[getrandom](https://docs.rs/getrandom/latest/getrandom/) backs SystemEntropy with
+the native platform source or Web Crypto on wasm32. Randomness is used for HPKE,
+AEAD nonces, session capabilities, operation IDs and pairing challenges, never as
+an additional unrecoverable root input. An entropy error publishes nothing.
+[zeroize](https://docs.rs/zeroize/latest/zeroize/) wipes owned secret buffers on drop;
+upstream copies, registers, allocator copies, browser input and crash dumps remain
+part of the review boundary.

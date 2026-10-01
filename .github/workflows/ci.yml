@@ -24,12 +24,44 @@ jobs:
           rustup default stable
           rustup component add rustfmt clippy
           rustup target add wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - name: Resolve and record dependencies
+        run: |
+          rustc --version
+          cargo metadata --locked --format-version 1 > dependency-metadata.json
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy (native, all targets)
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --locked --all-targets -- -D warnings
       - name: Test
-        run: cargo test
+        run: cargo test --locked
       - name: Clippy (wasm32, browser build)
-        run: cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings
+        run: cargo clippy --locked --lib --target wasm32-unknown-unknown -- -D warnings
+      - name: Install matching Wasm test runner
+        run: |
+          version=$(jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' dependency-metadata.json)
+          archive="wasm-bindgen-${version}-x86_64-unknown-linux-musl.tar.gz"
+          base="https://github.com/wasm-bindgen/wasm-bindgen/releases/download/${version}"
+          mkdir -p "$RUNNER_TEMP/ckmg-wasm-runner"
+          cd "$RUNNER_TEMP/ckmg-wasm-runner"
+          curl -A 'ci-library-check' --fail --location --retry 3 --remote-name "$base/$archive"
+          curl -A 'ci-library-check' --fail --location --retry 3 --remote-name "$base/$archive.sha256sum"
+          checksum=$(cut -d ' ' -f1 "$archive.sha256sum")
+          printf '%s  %s\n' "$checksum" "$archive" | sha256sum --check
+          tar -xzf "$archive" --strip-components=1
+          echo "$PWD" >> "$GITHUB_PATH"
+      - name: Execute shared vectors in headless Chrome
+        env:
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
+          WASM_BINDGEN_USE_BROWSER: '1'
+          WASM_BINDGEN_TEST_TIMEOUT: '60'
+        run: |
+          export CHROMEDRIVER="$(command -v chromedriver)"
+          cargo test --locked --target wasm32-unknown-unknown
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: dependency-lock
+          path: |
+            Cargo.lock
+            dependency-metadata.json

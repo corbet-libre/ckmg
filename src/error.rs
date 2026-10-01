@@ -4,6 +4,24 @@ use std::fmt;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
+    /// Operation requires a currently unlocked, authorized device.
+    Locked,
+    /// A mutation is prepared or an output awaits durable acknowledgement.
+    Pending,
+    /// Current state must be reloaded after a conflicting or uncertain write.
+    Reconcile,
+    /// No surviving encrypted checkpoint exists at the passkey-derived location.
+    MissingCheckpoint,
+    /// Current authority or an exact request binding was refused.
+    Unauthorized,
+    /// Current device is revoked.
+    Revoked,
+    /// A store or authority port is unavailable.
+    Unavailable,
+    /// Resource or counter bound exceeded.
+    Limit,
+    /// Injected time regressed.
+    Clock,
     /// Malformed input or stored data.
     Encoding,
     /// A cryptosystem other than VLD0.
@@ -26,19 +44,20 @@ pub enum Error {
     Randomness,
     /// A cryptographic operation failed unexpectedly.
     Crypto,
-    /// WebAuthn needs a window context (not a worker).
-    NoWindow,
-    /// A browser API call failed.
-    Browser,
-    /// The member cancelled, or the authenticator refused.
-    Cancelled,
-    /// The authenticator does not support the PRF extension.
-    PrfUnsupported,
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Error::Locked => f.write_str("keys are locked"),
+            Error::Pending => f.write_str("pending transition or output"),
+            Error::Reconcile => f.write_str("reload current state"),
+            Error::MissingCheckpoint => f.write_str("encrypted checkpoint absent"),
+            Error::Unauthorized => f.write_str("authority refused"),
+            Error::Revoked => f.write_str("device revoked"),
+            Error::Unavailable => f.write_str("port unavailable"),
+            Error::Limit => f.write_str("limit exceeded"),
+            Error::Clock => f.write_str("clock regressed"),
             Error::Encoding => f.write_str("malformed input"),
             Error::UnsupportedKind => f.write_str("unsupported cryptosystem"),
             Error::InvalidKey => f.write_str("invalid key"),
@@ -50,10 +69,6 @@ impl fmt::Display for Error {
             Error::RootExists => f.write_str("member root already present"),
             Error::Randomness => f.write_str("randomness unavailable"),
             Error::Crypto => f.write_str("cryptographic failure"),
-            Error::NoWindow => f.write_str("WebAuthn needs a window context"),
-            Error::Browser => f.write_str("browser API failure"),
-            Error::Cancelled => f.write_str("cancelled"),
-            Error::PrfUnsupported => f.write_str("authenticator lacks the PRF extension"),
         }
     }
 }

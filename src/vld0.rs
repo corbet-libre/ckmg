@@ -7,22 +7,25 @@
 //! hashing. The implementation composes the upstream crates; no primitive is ours.
 
 use crate::typed::{HashDigest, PublicKey, Signature, VLD0};
-use crate::{Error, Secret};
+use crate::{Entropy, Error, Secret};
 use ed25519_dalek::{Digest, Sha512, SigningKey, VerifyingKey};
 use hpke::{Deserializable, OpModeR, OpModeS, Serializable};
+use rand_core::SeedableRng;
 use zeroize::{Zeroize, Zeroizing};
 
 const VLD0_DOMAIN_SIGN: &[u8] = b"VLD0_SIGN";
-const HPKE_INFO: &[u8] = b"ckmg.seal.VLD0.v1";
+const HPKE_INFO: &[u8] = b"veilid-hpke/1VLD0";
+const HPKE_HEADER: &[u8] = b"\x01VLD0";
+pub(crate) const SEALED_ROOT_BYTES: usize = 5 + 32 + 32 + 16;
 const HPKE_ENC_LENGTH: usize = 32;
 
 type Kem = hpke::kem::X25519HkdfSha256;
 type Kdf = hpke::kdf::HkdfSha256;
 type Aead = hpke::aead::ChaCha20Poly1305;
 
-pub(crate) fn random_secret() -> Result<Secret, Error> {
+pub(crate) fn random_secret(rng: &mut impl Entropy) -> Result<Secret, Error> {
     let mut out = Zeroizing::new([0u8; 32]);
-    getrandom::fill(out.as_mut()).map_err(|_| Error::Randomness)?;
+    rng.fill(out.as_mut())?;
     Ok(out)
 }
 
@@ -114,25 +117,27 @@ fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
 }
 
 /// Seal `plaintext` to the holder of `recipient` (HPKE base mode).
-/// Output: `VLD0 ‖ enc ‖ ciphertext`.
-pub fn seal_to(
+/// Veilid HPKE v1 output: `1 ‖ VLD0 ‖ enc ‖ ciphertext`.
+pub(crate) fn seal_to(
+    rng: &mut impl Entropy,
     recipient: &PublicKey,
     associated_data: &[u8],
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let recipient = <Kem as hpke::Kem>::PublicKey::from_bytes(&x25519_public(recipient)?)
         .map_err(|_| Error::InvalidKey)?;
-    let (enc, ciphertext) = hpke::single_shot_seal::<Aead, Kdf, Kem>(
+    let (enc, ciphertext) = hpke::single_shot_seal_with_rng::<Aead, Kdf, Kem>(
         &OpModeS::Base,
         &recipient,
         HPKE_INFO,
         plaintext,
         associated_data,
+        &mut rand_chacha::ChaCha20Rng::from_seed(*random_secret(rng)?),
     )
     .map_err(|_| Error::Crypto)?;
     let enc = enc.to_bytes();
-    let mut out = Vec::with_capacity(4 + HPKE_ENC_LENGTH + ciphertext.len());
-    out.extend_from_slice(VLD0.bytes());
+    let mut out = Vec::with_capacity(5 + HPKE_ENC_LENGTH + ciphertext.len());
+    out.extend_from_slice(HPKE_HEADER);
     out.extend_from_slice(enc.as_slice());
     out.extend_from_slice(&ciphertext);
     Ok(out)
@@ -144,13 +149,13 @@ pub(crate) fn open(
     associated_data: &[u8],
     sealed: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
-    if sealed.len() < 4 + HPKE_ENC_LENGTH {
+    if sealed.len() < 5 + HPKE_ENC_LENGTH {
         return Err(Error::Encoding);
     }
-    if sealed[..4] != *VLD0.bytes() {
+    if &sealed[..5] != HPKE_HEADER {
         return Err(Error::UnsupportedKind);
     }
-    let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&sealed[4..4 + HPKE_ENC_LENGTH])
+    let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&sealed[5..5 + HPKE_ENC_LENGTH])
         .map_err(|_| Error::Open)?;
     let private = <Kem as hpke::Kem>::PrivateKey::from_bytes(x25519_secret(secret).as_slice())
         .map_err(|_| Error::Crypto)?;
@@ -159,20 +164,15 @@ pub(crate) fn open(
         &private,
         &enc,
         HPKE_INFO,
-        &sealed[4 + HPKE_ENC_LENGTH..],
+        &sealed[5 + HPKE_ENC_LENGTH..],
         associated_data,
     )
     .map(Zeroizing::new)
     .map_err(|_| Error::Open)
 }
 
-/// Deterministic child secret: BLAKE3 key derivation over the parent secret and an
-/// unambiguous encoding of the label and version.
-pub(crate) fn derive_child(context: &str, parent: &Secret, label: &str, version: u32) -> Secret {
-    let mut material = Zeroizing::new(Vec::with_capacity(32 + 8 + label.len()));
-    material.extend_from_slice(parent.as_slice());
-    material.extend_from_slice(&(label.len() as u32).to_le_bytes());
-    material.extend_from_slice(label.as_bytes());
-    material.extend_from_slice(&version.to_le_bytes());
-    Zeroizing::new(blake3::derive_key(context, &material))
+/// Plain Ed25519 for owner formats (COSE/OpenMLS/cgrd) that do not use Ed25519ph.
+pub(crate) fn sign_ed25519(secret: &Secret, data: &[u8]) -> [u8; 64] {
+    use ed25519_dalek::Signer;
+    SigningKey::from_bytes(secret).sign(data).to_bytes()
 }
