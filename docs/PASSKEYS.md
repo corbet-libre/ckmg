@@ -16,7 +16,7 @@ build. Web Crypto remains the platform entropy source through `getrandom`.
 The adapter move must preserve a versioned PRF input. The historical adapter used
 `blake3::derive_key("ckmg 2026-09 passkey PRF input for vault store unlock v1", b"")`.
 That is compatibility evidence for cpky, not a PRF-input API retained in Keys.
-Changing the PRF evaluation input changes every derived root. cpky must qualify
+Changing the PRF evaluation input changes wrapping keys, locators and device keys. cpky must qualify
 synced-provider, native and browser behavior, refuse member registration without
 PRF, use server ceremony options, and strip PRF results from outbound responses.
 Keyhole must reject responses containing PRF output. Root/admin exceptions are
@@ -28,7 +28,9 @@ obtained: a local constructor is not authentication. The injected Authority port
 must verify live membership/device authority separately. `cwst` receives only the
 opaque `StoreCipher` from `passkey::store_cipher`, never the input or any key bytes.
 
-`identity_roots` is wallet custody, separate from each community's `Keys`. The
-application must use a stable wallet domain and the wallet's own passkey. Never
-publish a wallet identity key, holder seed or cross-community locator as a member
-identifier. A community binding uses the existing verified pseudonym.
+The common identity root is random and retained under every enrolled passkey's
+PRF-based wrapping key. No passkey has privileged recordless recovery. Keys derives
+the Wallet holder seed from that retained root; Wallet owns passport operations.
+Use a stable wallet domain, separate from community custody. Never publish a wallet
+identity key, holder seed or cross-community locator as a member identifier; a
+community binding uses the existing verified pseudonym.

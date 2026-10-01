@@ -28,7 +28,7 @@ pub enum State {
     Prepared,
     /// Commit may have happened, or another writer changed storage. Unlock to reconcile.
     Reconcile,
-    /// No checkpoint exists. Explicit authorized restoration can rederive custody.
+    /// No checkpoint exists. Authorized restoration still needs a retained encrypted copy.
     MissingCheckpoint,
     /// This logical device has been removed; no root is retained.
     Revoked,
@@ -131,7 +131,8 @@ pub enum Change {
 /// Source of the current shared root when reconstituting an absent checkpoint.
 /// All cases also require independently authenticated current lineage/authority.
 pub enum RestoreRoot<'a> {
-    /// Derive this credential's root at the authenticated current epoch.
+    /// Historical API spelling retained only to refuse recordless restoration.
+    /// Every passkey needs a retained encrypted copy; this always returns MissingCheckpoint.
     Derived,
     /// A retained root transfer for a different credential enrolled by pairing.
     Paired(&'a PairingGrant),
@@ -216,7 +217,6 @@ struct Metadata {
 struct Open {
     location: Locator,
     key: Secret,
-    lineage_seed: Secret,
     session: [u8; 32],
     stamp: [u8; 32],
     metadata: Metadata,
@@ -232,7 +232,8 @@ struct Prepared {
 
 /// One logical device in one community. Ports are supplied by the enclosing vault.
 ///
-/// It owns no network, files, membership policy or global-holder material. A missing
+/// It owns no network, files or membership policy. The optional passport engine
+/// belongs only to the separately selected wallet scope. A missing
 /// checkpoint never implicitly creates an identity. Every secret operation
 /// rechecks storage generation, clock and the injected current authority.
 pub struct Keys<S, C, R, A> {
@@ -244,6 +245,8 @@ pub struct Keys<S, C, R, A> {
     open: Option<Open>,
     prepared: Option<Prepared>,
     last_time: u64,
+    #[cfg(feature = "passport")]
+    wallet_roots: Option<passkey::IdentityRoots>,
 }
 
 impl<S, C, R, A> std::fmt::Debug for Keys<S, C, R, A> {
@@ -267,6 +270,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             open: None,
             prepared: None,
             last_time: 0,
+            #[cfg(feature = "passport")]
+            wallet_roots: None,
         }
     }
 
@@ -278,6 +283,10 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Wipe decrypted material and uncommitted candidates. A committed pending output
     /// remains in storage for reconciliation. All existing handles become unusable.
     pub fn lock(&mut self) {
+        #[cfg(feature = "passport")]
+        {
+            self.wallet_roots = None;
+        }
         self.open = None;
         self.prepared = None;
         self.state = State::Locked;
@@ -430,7 +439,6 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let open = Open {
             location,
             key,
-            lineage_seed: passkey::lineage_seed(prf, community)?,
             session,
             stamp: *blake3::hash(&sealed).as_bytes(),
             metadata,
@@ -441,7 +449,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         Ok(())
     }
 
-    /// Explicitly create the first community root/device, after the authority adapter
+    /// Explicitly create a random common root and a PRF-wrapped device, after the authority adapter
     /// verifies the new-member binding. Existing storage is never overwritten.
     pub async fn create_scope(
         &mut self,
@@ -454,7 +462,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let location = passkey::vault_location(prf, binding.community())?;
         self.require_absent(location).await?;
         let now = self.now()?;
-        let material = Material::derive(prf, binding.community(), true)?;
+        let material = Material::derive(prf, binding.community(), true, &mut self.entropy)?;
         let device = vld0::public_key(&material.device);
         self.check_authority(Authorization {
             binding: &binding,
@@ -469,11 +477,12 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         })
         .await?;
         let mut lineage = Lineage {
-            version: 1,
+            version: 2,
             binding,
             epoch: 1,
             revision: 1,
             root: vld0::public_key(material.root()?),
+            identity: material.identity.as_ref().map(vld0::public_key),
             devices: vec![device],
             signature: empty_signature(),
         };
@@ -487,7 +496,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Reconstitute an absent checkpoint for an existing member. The same PRF derives
     /// the same logical device; current authority must authenticate the exact anchor
     /// and reject removed devices. Unreachable/corrupt/existing records never reach
-    /// this path. Only data is recreated; binding, epoch and lineage stay unchanged.
+    /// this path. A retained authenticated transfer is required: the PRF alone
+    /// cannot recreate the common random root. Binding, epoch and lineage stay unchanged.
     pub async fn restore_scope(
         &mut self,
         prf: &PrfOutput,
@@ -500,7 +510,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         anchor.verify()?;
         let location = passkey::vault_location(prf, anchor.binding.community())?;
         self.require_absent(location).await?;
-        let mut material = Material::derive(prf, anchor.binding.community(), false)?;
+        let mut material = Material::derive(prf, anchor.binding.community(), false, &mut self.entropy)?;
         let device = vld0::public_key(&material.device);
         if !anchor.devices.contains(&device) {
             return Err(Error::Unauthorized);
@@ -518,14 +528,13 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             evidence,
         })
         .await?;
-        material.root = Some(match source {
-            RestoreRoot::Derived => passkey::lineage_root(
-                &passkey::lineage_seed(prf, anchor.binding.community())?,
-                anchor.epoch,
-            )?,
+        match source {
+            RestoreRoot::Derived => return Err(Error::MissingCheckpoint),
             RestoreRoot::Paired(grant) => {
                 grant.lineage.verify()?;
-                if grant.request.device != device
+                if grant.lineage.version != anchor.version
+                    || grant.lineage.identity != anchor.identity
+                    || grant.request.device != device
                     || grant.request.binding != anchor.binding
                     || grant.request.root != anchor.root
                     || grant.request.epoch != anchor.epoch
@@ -545,15 +554,18 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                     &grant.request.proof,
                 )?;
                 vld0::verify(&anchor.root, &grant.signed_bytes()?, &grant.signature)?;
-                keyring::secret(&vld0::open(
+                let plaintext = vld0::open(
                     &material.device,
                     &grant.aad()?,
                     &grant.sealed_root,
-                )?)?
+                )?;
+                material.receive(grant.version, &plaintext)?;
             }
             RestoreRoot::Rotated(rotation) => {
                 rotation.lineage.verify()?;
-                if rotation.lineage.binding != anchor.binding
+                if rotation.lineage.version != anchor.version
+                    || rotation.lineage.identity != anchor.identity
+                    || rotation.lineage.binding != anchor.binding
                     || rotation.lineage.root != anchor.root
                     || rotation.lineage.epoch != anchor.epoch
                     || rotation.lineage.revision > anchor.revision
@@ -573,13 +585,14 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                     .iter()
                     .find(|e| e.device == device)
                     .ok_or(Error::Unauthorized)?;
-                keyring::secret(&vld0::open(
+                let plaintext = vld0::open(
                     &material.device,
                     &rotation.aad(device)?,
                     &envelope.sealed_root,
-                )?)?
+                )?;
+                material.receive(rotation.version, &plaintext)?;
             }
-        });
+        }
         if vld0::public_key(material.root()?) != anchor.root {
             return Err(Error::Unauthorized);
         }
@@ -602,7 +615,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let location = passkey::vault_location(prf, anchor.binding.community())?;
         self.require_absent(location).await?;
         let now = self.now()?;
-        let material = Material::derive(prf, anchor.binding.community(), false)?;
+        let material = Material::derive(prf, anchor.binding.community(), false, &mut self.entropy)?;
         let device = vld0::public_key(&material.device);
         self.check_authority(Authorization {
             binding: &anchor.binding,
@@ -725,7 +738,6 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         Ok(Open {
             location,
             key: passkey::ring_key(prf, lineage.binding.community())?,
-            lineage_seed: passkey::lineage_seed(prf, lineage.binding.community())?,
             session: *vld0::random_secret(&mut self.entropy)?,
             stamp: [0; 32],
             material,
@@ -932,6 +944,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         lineage.devices.sort();
         lineage.signature = vld0::sign(candidate.material.root()?, &lineage.signed_bytes()?)?;
         let mut grant = PairingGrant {
+            version: candidate.material.transfer_version(),
             request: request.clone(),
             lineage: lineage.clone(),
             sealed_root: Vec::new(),
@@ -941,7 +954,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             &mut self.entropy,
             &request.device,
             &grant.aad()?,
-            candidate.material.root()?.as_slice(),
+            &candidate.material.transfer()?,
         )?;
         grant.signature = vld0::sign(candidate.material.root()?, &grant.signed_bytes()?)?;
         let expected = candidate.stamp;
@@ -969,7 +982,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         }
         let previous = &candidate.metadata.lineage;
         grant.lineage.verify()?;
-        if grant.lineage.binding != previous.binding
+        if grant.lineage.version != previous.version
+            || grant.lineage.identity != previous.identity
+            || grant.lineage.binding != previous.binding
             || grant.lineage.root != previous.root
             || grant.lineage.epoch != previous.epoch
             || grant.lineage.revision <= previous.revision
@@ -995,11 +1010,10 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             &grant.aad()?,
             &grant.sealed_root,
         )?;
-        let root = keyring::secret(&plaintext)?;
-        if vld0::public_key(&root) != previous.root {
+        candidate.material.receive(grant.version, &plaintext)?;
+        if vld0::public_key(candidate.material.root()?) != previous.root {
             return Err(Error::InvalidKey);
         }
-        candidate.material.root = Some(root);
         candidate.metadata.pairing = None;
         candidate.metadata.lineage = grant.lineage.clone();
         let expected = candidate.stamp;
@@ -1024,7 +1038,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .await?;
         let mut candidate = self.loaded()?.clone();
         let previous = &candidate.metadata.lineage;
-        if next.binding != previous.binding
+        if next.version != previous.version
+            || next.identity != previous.identity
+            || next.binding != previous.binding
             || next.root != previous.root
             || next.epoch != previous.epoch
             || next.revision <= previous.revision
@@ -1066,12 +1082,13 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let mut candidate = self.loaded()?.clone();
         let mut next = previous.clone();
         next.epoch = next.epoch.checked_add(1).ok_or(Error::Limit)?;
-        let root = passkey::lineage_root(&candidate.lineage_seed, next.epoch)?;
+        let root = vld0::random_secret(&mut self.entropy)?;
         next.root = vld0::public_key(&root);
         next.revision = next.revision.checked_add(1).ok_or(Error::Limit)?;
         next.devices.retain(|d| *d != revoked);
         next.signature = vld0::sign(&root, &next.signed_bytes()?)?;
         let mut rotation = Rotation {
+            version: candidate.material.transfer_version(),
             predecessor: previous.digest()?,
             previous_root: previous.root,
             revoked,
@@ -1079,12 +1096,15 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             envelopes: Vec::new(),
             signature: empty_signature(),
         };
+        let mut replacement = candidate.material.clone();
+        replacement.root = Some(root.clone());
+        let transfer = replacement.transfer()?;
         for device in &next.devices {
             let sealed_root = vld0::seal_to(
                 &mut self.entropy,
                 device,
                 &rotation.aad(*device)?,
-                root.as_slice(),
+                &transfer,
             )?;
             rotation.envelopes.push(RootEnvelope {
                 device: *device,
@@ -1137,6 +1157,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         .await?;
         let change = if device == rotation.revoked {
             candidate.material.root = None;
+            candidate.material.identity = None;
             candidate.metadata.revoked = true;
             Change::Revoked(rotation.lineage.clone())
         } else {
@@ -1150,11 +1171,10 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 &rotation.aad(device)?,
                 &envelope.sealed_root,
             )?;
-            let root = keyring::secret(&plaintext)?;
-            if vld0::public_key(&root) != rotation.lineage.root {
+            candidate.material.receive(rotation.version, &plaintext)?;
+            if vld0::public_key(candidate.material.root()?) != rotation.lineage.root {
                 return Err(Error::InvalidKey);
             }
-            candidate.material.root = Some(root);
             Change::Adopted(rotation.lineage.clone())
         };
         candidate.metadata.lineage = rotation.lineage.clone();
@@ -1281,6 +1301,124 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .await
     }
 
+    /// Lend the original Veilid record cipher without exporting its read secret.
+    /// A separate derivation context prevents sharing a key with purpose AEAD.
+    /// The record adapter owns nonce freshness and verification of the signed
+    /// value before decryption. Current authority is checked for every call.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>, handle: &KeyHandle) {
+    /// let retained = keys.with_vld0_record_cipher(handle, |cipher| cipher).await;
+    /// # }
+    /// ```
+    pub async fn with_vld0_record_cipher<T>(
+        &mut self,
+        handle: &KeyHandle,
+        use_cipher: impl for<'key> FnOnce(crate::Vld0RecordCipher<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.check_handle(handle).await?;
+        let purpose = purpose_secret(self.loaded()?, &handle.certificate.purpose, true)?;
+        let secret = Zeroizing::new(blake3::derive_key(
+            "ckmg 2026-10 VLD0 record encryption v1",
+            &*purpose,
+        ));
+        Ok(use_cipher(crate::Vld0RecordCipher { secret: &secret }))
+    }
+
+    /// Lend the actual lineage device signer for upstream plain-Ed25519 formats
+    /// such as profile publication. Its public key is a member of `Lineage.devices`,
+    /// unlike a purpose key. Current server/device authority is checked first.
+    /// This capability is never a replacement for the server's G3 authorization.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>) {
+    /// let retained = keys.with_device_ed25519_signer(|signer| signer).await;
+    /// # }
+    /// ```
+    pub async fn with_device_ed25519_signer<T>(
+        &mut self,
+        use_signer: impl for<'key> FnOnce(Ed25519Signer<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let secret = &self.loaded()?.material.device;
+        Ok(use_signer(Ed25519Signer {
+            secret,
+            public_key: *vld0::public_key(secret).value(),
+        }))
+    }
+
+    /// Lend the originating scope identity after fresh live-device authorization.
+    /// Pairing and retained checkpoints preserve this identity across distinct PRFs.
+    /// The borrowed capability and secret material cannot escape the callback.
+    pub async fn with_identity<T>(
+        &mut self,
+        use_identity: impl for<'call> FnOnce(&'call passkey::IdentityRoots) -> T,
+    ) -> Result<T, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let current = self.loaded()?;
+        let seeds = current.material.identity.as_ref().ok_or(Error::MissingCheckpoint)?;
+        let roots = passkey::IdentityRoots::retained(
+            current.metadata.lineage.binding.community(),
+            vld0::public_key(&current.material.device),
+            seeds,
+        )?;
+        Ok(use_identity(&roots))
+    }
+
+    /// Open Wallet custody from the retained common random root after authorization.
+    /// The private root/holder seed never enters a caller argument or return value.
+    #[cfg(feature = "passport")]
+    pub async fn install_wallet_roots(&mut self) -> Result<(), Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        if self.wallet_roots.is_some() {
+            return Err(Error::Pending);
+        }
+        let current = self.loaded()?;
+        let seeds = current.material.identity.as_ref().ok_or(Error::MissingCheckpoint)?;
+        let mut roots = passkey::IdentityRoots::retained(
+            current.metadata.lineage.binding.community(),
+            vld0::public_key(&current.material.device),
+            seeds,
+        )?;
+        roots.holder_for(
+            current.metadata.lineage.binding.community(),
+            vld0::public_key(&current.material.device),
+        )?;
+        self.wallet_roots = Some(roots);
+        Ok(())
+    }
+
+    /// Fresh-authorize the exact wallet scope, then lend its nonexporting holder.
+    /// The callback cannot retain the capability or access its underlying engine.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>) {
+    /// let retained = keys.with_passport_holder(|holder| holder).await;
+    /// # }
+    /// ```
+    #[cfg(feature = "passport")]
+    pub async fn with_passport_holder<T>(
+        &mut self,
+        use_holder: impl for<'call> FnOnce(cwlt::PassportSession<'call>) -> T,
+    ) -> Result<T, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let current = self.loaded()?;
+        let domain = current.metadata.lineage.binding.community().to_owned();
+        let device = vld0::public_key(&current.material.device);
+        let roots = self.wallet_roots.as_mut().ok_or(Error::Locked)?;
+        Ok(roots.holder_for(&domain, device)?.with_session(use_holder))
+    }
+
     /// Encrypt with a separate symmetric purpose key, authenticating scope, epoch,
     /// purpose, and caller context. Member-scope ciphertext opens on paired devices.
     pub async fn seal(
@@ -1350,10 +1488,10 @@ fn encode_checkpoint(
     material: &Material,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
     let metadata = Zeroizing::new(serde_json::to_vec(metadata).map_err(|_| Error::Encoding)?);
-    if metadata.len() + 69 > MAX_CHECKPOINT_BYTES - 64 {
+    if metadata.len() + 101 > MAX_CHECKPOINT_BYTES - 64 {
         return Err(Error::Limit);
     }
-    let mut bytes = Zeroizing::new(Vec::with_capacity(4 + metadata.len() + 65));
+    let mut bytes = Zeroizing::new(Vec::with_capacity(4 + metadata.len() + 97));
     bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&metadata);
     material.append(&mut bytes);
@@ -1375,6 +1513,13 @@ fn validate_checkpoint(metadata: &Metadata, material: &Material) -> Result<(), E
         return Err(Error::Encoding);
     }
     metadata.lineage.verify()?;
+    if let Some(seeds) = &material.identity {
+        if metadata.lineage.identity != Some(vld0::public_key(seeds)) {
+            return Err(Error::Encoding);
+        }
+    } else if metadata.lineage.identity.is_some() && material.root.is_some() {
+        return Err(Error::Encoding);
+    }
     let device = vld0::public_key(&material.device);
     match (&material.root, &metadata.pairing, metadata.revoked) {
         (Some(root), None, false)

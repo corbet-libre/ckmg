@@ -6,7 +6,9 @@ Write all code comments and documentation in English.
 
 - Key drawer of the member vault (`cvlt`): root → device → purpose keys, VLD0 format,
   sign / verify / seal / open, delegation, pairing (root sealed to a new device), root
-  rotation and deterministic PRF → vault, identity, holder and lineage roots.
+  rotation, PRF-derived wrapping/device capabilities and a retained random common
+  identity root. Every enrolled passkey has equal recovery through its own wrapped
+  copy; no passkey can recreate a lost common root from its PRF alone.
 - Invariant 5: root and device secrets never cross the public API. Only purpose keys may
   be delegated. The only way the root leaves is `seal_root_for_device` (pairing).
 - cpky Passkeys (device) alone talks to WebAuthn; ckyh Keyhole is the server.
@@ -27,7 +29,8 @@ Write all code comments and documentation in English.
 - `src/purpose.rs`: `Purpose`, `Scope`; opaque capabilities and certificates live in keys/lineage.
 - `src/keyring.rs`: private material and checkpoint encryption.
 - `src/keys.rs`, `src/lineage.rs`, `src/ports.rs`: authorized custody and transactions.
-- `src/passkey.rs`: opaque PRF input and deterministic derivation, no WebAuthn.
+- `src/passkey.rs`: opaque PRF input, wrapping/device derivation and private
+  purpose derivation from the retained common root; no WebAuthn.
 - `docs/CONSTRUCTIONS.md`, `docs/SECURITY-REVIEW.md`: references and review gates.
 
 ## Quality boundary

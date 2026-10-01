@@ -45,6 +45,36 @@ fn restore_is_identity_preserving_and_never_implicitly_creates() {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_passkey_does_not_determine_the_common_identity_root() {
+    block_on(async {
+        // Separate initial enrollments demonstrate the entropy input. An existing
+        // membership's authority would reject creating either replacement.
+        let left_store = Memory::default();
+        let right_store = Memory::default();
+        let left_guard = Guard::default();
+        let right_guard = Guard::default();
+        let time = Time::default();
+        let mut left = machine(&left_store, &time, &left_guard, 81);
+        let mut right = machine(&right_store, &time, &right_guard, 82);
+        create(&mut left, &left_guard, &prf(1), &binding("a")).await;
+        create(&mut right, &right_guard, &prf(1), &binding("a")).await;
+        let first = left.lineage().await.unwrap();
+        let second = right.lineage().await.unwrap();
+        assert_eq!(first.devices, second.devices);
+        assert_ne!(first.root, second.root);
+        assert_ne!(first.identity, second.identity);
+        let left_identity = left.with_identity(|identity| identity.public_key()).await.unwrap();
+        let right_identity = right.with_identity(|identity| identity.public_key()).await.unwrap();
+        assert_ne!(left_identity, right_identity);
+        left.lock();
+        left.unlock(&prf(1), "a").await.unwrap();
+        assert_eq!(left.with_identity(|identity| identity.public_key()).await.unwrap(), left_identity);
+        assert_eq!(left.lineage().await.unwrap(), first);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn signatures_and_encryption_bind_community_purpose_device_and_epoch() {
     block_on(async {
         let store = Memory::default();
@@ -593,7 +623,7 @@ fn restore_consent(anchor: &Lineage) -> Vec<u8> {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
-fn lost_vault_rederives_the_exact_identity_device_and_member_keys() {
+fn retained_encrypted_vault_restores_the_exact_identity_device_and_member_keys() {
     block_on(async {
         let store = Memory::default();
         let time = Time::default();
@@ -627,18 +657,15 @@ fn lost_vault_rederives_the_exact_identity_device_and_member_keys() {
                 .unwrap_err(),
             Error::Unauthorized
         );
-        let receipt = phone
-            .restore_scope(
-                &prf(1),
-                &lineage,
-                RestoreRoot::Derived,
-                info(),
-                &restore_consent(&lineage),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(receipt.change, Change::Restored(_)));
-        phone.acknowledge(receipt.operation).await.unwrap();
+        assert_eq!(
+            phone.restore_scope(
+                &prf(1), &lineage, RestoreRoot::Derived, info(), &restore_consent(&lineage),
+            ).await.unwrap_err(),
+            Error::MissingCheckpoint,
+        );
+        // The member's retained encrypted records, never an operator root copy.
+        empty.0.borrow_mut().records = store.0.borrow().records.clone();
+        phone.unlock(&prf(1), "a").await.unwrap();
         assert_eq!(phone.lineage().await.unwrap(), lineage);
         let restored_member = phone.key(purpose(Scope::Member, "records")).await.unwrap();
         let restored_device = phone.key(purpose(Scope::Device, "mls")).await.unwrap();
@@ -761,6 +788,8 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
         let mut c = machine(&store, &time, &guard, 37);
         create(&mut a, &guard, &prf(1), &binding("a")).await;
         let grant = pair(&mut a, &mut b, &guard, &prf(2)).await;
+        let identity = a.with_identity(|roots| roots.public_key()).await.unwrap();
+        assert_eq!(b.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
         let anchor = a.lineage().await.unwrap();
         time.0.set(1400); // The original pairing challenge has expired.
         let empty = Memory::default();
@@ -776,7 +805,7 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
                 )
                 .await
                 .unwrap_err(),
-            Error::Unauthorized
+            Error::MissingCheckpoint
         );
         let mut damaged = grant.clone();
         damaged.sealed_root[40] ^= 1;
@@ -804,6 +833,10 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         phone.acknowledge(receipt.operation).await.unwrap();
         assert_eq!(phone.lineage().await.unwrap(), anchor);
+        assert_eq!(phone.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        phone.lock();
+        phone.unlock(&prf(2), "a").await.unwrap();
+        assert_eq!(phone.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
         let third = pair(&mut a, &mut c, &guard, &prf(3)).await;
         prepare(&mut a, third.request.device).await;
         let receipt = a.commit().await.unwrap().unwrap();
@@ -811,13 +844,13 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
         a.acknowledge(receipt.operation).await.unwrap();
         let rotation = rotation(&receipt);
         let anchor = &rotation.lineage;
-        // The rotating credential regenerates the current root without a transfer.
+        // The initiator needs its retained envelope exactly like every other survivor.
         let mut owner = machine(&Memory::default(), &time, &guard, 39);
         let restored = owner
             .restore_scope(
                 &prf(1),
                 anchor,
-                RestoreRoot::Derived,
+                RestoreRoot::Rotated(rotation),
                 info(),
                 &restore_consent(anchor),
             )
@@ -840,6 +873,8 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         survivor.acknowledge(restored.operation).await.unwrap();
         assert_eq!(survivor.lineage().await.unwrap(), *anchor);
+        assert_eq!(owner.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        assert_eq!(survivor.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
         let mut removed = machine(&Memory::default(), &time, &guard, 41);
         assert_eq!(
             removed
@@ -878,6 +913,8 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
         let guard = Guard::default();
         let mut old = machine(&Memory::default(), &time, &guard, 42);
         create(&mut old, &guard, &prf(1), &binding("a")).await;
+        let mut paired = machine(&Memory::default(), &time, &guard, 44);
+        let grant = pair(&mut old, &mut paired, &guard, &prf(2)).await;
         let anchor = old.lineage().await.unwrap();
         let store = Memory::default();
         store.0.borrow_mut().fault = Fault::After;
@@ -885,9 +922,9 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
         assert_eq!(
             phone
                 .restore_scope(
-                    &prf(1),
+                    &prf(2),
                     &anchor,
-                    RestoreRoot::Derived,
+                    RestoreRoot::Paired(&grant),
                     info(),
                     &restore_consent(&anchor)
                 )
@@ -896,11 +933,11 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
             Error::Reconcile
         );
         store.0.borrow_mut().fault = Fault::None;
-        phone.unlock(&prf(1), "a").await.unwrap();
+        phone.unlock(&prf(2), "a").await.unwrap();
         let receipt = phone.pending_output().await.unwrap().unwrap();
         assert_eq!(receipt.change, Change::Restored(anchor));
         phone.lock();
-        phone.unlock(&prf(1), "a").await.unwrap();
+        phone.unlock(&prf(2), "a").await.unwrap();
         assert_eq!(phone.pending_output().await.unwrap(), Some(receipt));
     });
 }
@@ -1002,6 +1039,17 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         .unwrap();
         assert_ne!(actual, vld0);
         assert!(verify_ed25519(&public, b"OpenMLS transcript", &vld0).is_err());
+        let lineage = keys.lineage().await.unwrap();
+        let (device, proof) = keys
+            .with_device_ed25519_signer(|signer| {
+                let public = *signer.public_key();
+                (public, signer.sign(b"original profile transcript").unwrap())
+            })
+            .await
+            .unwrap();
+        assert!(lineage.devices.contains(&PublicKey::new(VLD0, device)));
+        assert_ne!(device, public);
+        verify_ed25519(&device, b"original profile transcript", &proof).unwrap();
         guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
         let called = std::cell::Cell::new(false);
         assert!(
@@ -1011,5 +1059,50 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         );
         assert!(!called.get());
         assert_eq!(keys.state(), State::Revoked);
+        assert!(
+            keys.with_device_ed25519_signer(|_| called.set(true))
+                .await
+                .is_err()
+        );
+        assert!(!called.get());
     });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_cipher_restores_exact_bytes_without_exporting_read_keys() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut keys = machine(&store, &time, &guard, 94);
+        create(&mut keys, &guard, &prf(1), &binding("a")).await;
+        let handle = keys.key(purpose(Scope::Member, "records")).await.unwrap();
+        let nonce = [21; 24];
+        let ciphertext = keys.with_vld0_record_cipher(&handle, |cipher| {
+            assert_eq!(cipher.crypt(&nonce, &vec![0; MAX_MESSAGE_BYTES + 1]), Err(Error::Limit));
+            assert!(cipher.crypt(&nonce, &[]).unwrap().is_empty());
+            cipher.crypt(&nonce, b"padded original record").unwrap()
+        }).await.unwrap();
+        assert_ne!(&*ciphertext, b"padded original record");
+        let wrong = keys.key(purpose(Scope::Member, "other-record")).await.unwrap();
+        let other = keys.with_vld0_record_cipher(&wrong, |cipher| cipher.crypt(&nonce, &ciphertext)).await.unwrap().unwrap();
+        assert_ne!(&*other, b"padded original record");
+        keys.lock();
+        keys.unlock(&prf(1), "a").await.unwrap();
+        let restored = keys.key(purpose(Scope::Member, "records")).await.unwrap();
+        let opened = keys.with_vld0_record_cipher(&restored, |cipher| cipher.crypt(&nonce, &ciphertext)).await.unwrap().unwrap();
+        assert_eq!(&*opened, b"padded original record");
+        guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
+        let called = std::cell::Cell::new(false);
+        assert!(keys.with_vld0_record_cipher(&restored, |_| called.set(true)).await.is_err());
+        assert!(!called.get());
+    });
+}
+
+// Link the maintained profiler only into instrumented test binaries.
+#[cfg(all(target_arch = "wasm32", owned_browser_coverage))]
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn profiling_runtime_is_linked() {
+    let _ = browser_coverage_runtime::__owned_test_module_signature();
 }

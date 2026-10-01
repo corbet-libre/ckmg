@@ -14,30 +14,27 @@ resolutions and the exact reviewed source/dependency revisions.
 - Independently reproduce every HKDF vector, label, NUL delimiter, domain spelling,
   output length, epoch encoding and first-level/epoch salt. Check domain separation
   across wallet, communities, store wrapping, signing, encryption and lineage.
-- Check that initial keys, identity root and holder seed survive total checkpoint
-  loss with a fresh device and independent RNG. Roots must not depend on random
-  nonces, local device names, credential IDs, time or the lost checkpoint.
-- Review deterministic rotations: a removed distinct credential gets no lineage
-  seed; epoch reuse must be bound to authenticated current lineage and durable CAS.
-  The same compromised/synced PRF cannot be selectively revoked as separate hardware.
-  No forward secrecy or post-compromise healing is claimed for derived roots.
+- Check that initial common roots and replacement epoch roots use independent
+  CSPRNG output. The PRF must derive wrapping/locator/device material only. Every
+  passkey needs a retained encrypted common root; no first credential can recover
+  identity after every encrypted and local copy is lost.
+- Review random epoch replacement: a removed credential receives no new envelope;
+  old common identity custody cannot derive future epoch roots. The same synced PRF
+  cannot be selectively revoked as separate hardware.
 - Verify Restore authority binds the exact current lineage digest, member binding,
   root, epoch and derived device, not just a self-signature. Try stale revisions,
   revoked credentials, changed pseudonyms, wrong scopes, fake absence, read failures,
   corrupt records, concurrent writers and cancelled/unknown writes. None may create
   a new member, reset obligations or resurrect removed authority.
-- Validate retention of pairing/rotation envelopes independently of vault content.
-  An unrelated PRF cannot derive another credential's shared root without a transfer.
-  If all such transfers disappear, stable personal seeds remain derivable but that
-  shared root cannot be reconstructed. Resolve this in the product's retention and
-  reenrollment design before promising all-passkey restoration after every loss.
+- Validate member-owned retention and refresh of wrapped root copies, authenticated
+  pairing and equal restore behavior across different PRFs. Distinguish a network
+  outage from loss of every local and DHT copy. No operator-held root is available.
 
 ## Passport and membership integration gates
 
-- The holder seed is derived and kept opaque here; there is currently **no adapter
-  to the existing cpsd holder engine**. Review and implement the versioned mapping
-  into its established nonzero-scalar construction inside custody, with no raw seed,
-  scalar or deterministic-RNG export. Do not substitute an Ed25519 key or invent BBS.
+- Review the Keys-to-Wallet seed handover and Wallet-owned PassportSession against
+  actual cpsd operations. No mutable engine borrow, raw seed/scalar getter or local
+  holder implementation may bypass the fresh authorization boundary.
 - Prove unchanged issuer tag and community pseudonyms across device loss using the
   real passport engine, then renew/reissue lost credential data through existing
   issuer rules. This library does not recreate signatures an issuer never issued.
@@ -45,7 +42,8 @@ resolutions and the exact reviewed source/dependency revisions.
   including fresh authorized restoration with empty data and unchanged cblc state.
   The native/Wasm fixture Authority is not production authorization evidence.
 - Run the cdht churn/device-loss scenario: an active member's contacts and history
-  return when encrypted records survive; only data is lost when records are gone.
+  return when encrypted records survive; identity and data are both lost if every
+  local and DHT copy is gone.
   Key tests do not establish DHT retention or product restoration by themselves.
 
 ## Cryptographic compositions
@@ -84,6 +82,12 @@ resolutions and the exact reviewed source/dependency revisions.
   commits. Define how production adapters close freshness/TOCTOU gaps; per-operation
   checks alone are not a cross-service transaction. Verify rotation cannot publish
   both competing successors or revive revoked keys after checkpoint loss.
+- Resolve historical-data custody before accepting complete restore. Current
+  purpose derivation includes the current epoch and rotation replaces its root.
+  Test pre-rotation contacts/history after several rotations, loss of every local
+  copy and restore from authenticated retained records. The current API does not
+  provide historical-purpose reads or an atomic owner-record rewrap transaction;
+  neither stable identity nor current-epoch key agreement proves old data survives.
 - Check dependency features, advisories, licenses and resolved revisions on both
   targets. Keep Veilid-derived MPL material isolated. Reference tests using the same
   upstream primitives are interoperability evidence, not independent crypto review.

@@ -19,7 +19,7 @@ route or object files are required for combined works under the exception.
 
 ## Test-only Veilid reference material
 
-`src/veilid_reference_tests.rs` and `tests/fixtures/rfc9180_a2_base.json` are
+`tests/unit/veilid_reference.rs` and `tests/fixtures/rfc9180_a2_base.json` are
 separate [MPL-2.0](LICENSES/MPL-2.0.txt) reference material adapted/copied from
 [Veilid at dd8e2cdd72b5bf817172ac31c20872b168c5c8fc](https://gitlab.com/veilid/veilid/-/tree/dd8e2cdd72b5bf817172ac31c20872b168c5c8fc).
 The fixture reproduces RFC 9180 Appendix A.2.1. These files are compiled only in

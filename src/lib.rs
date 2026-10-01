@@ -18,8 +18,11 @@ mod keyring;
 mod keys;
 mod lineage;
 pub mod passkey;
+#[cfg(feature = "passport")]
+pub use cwlt::PassportSession;
 mod ports;
 mod purpose;
+mod record_cipher;
 mod typed;
 mod vld0;
 
@@ -36,6 +39,7 @@ pub use ports::{
     MAX_DEVICES, MAX_MESSAGE_BYTES, SecureStore, SystemEntropy,
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
+pub use record_cipher::Vld0RecordCipher;
 pub use typed::{BEST_KIND, CryptoKind, HashDigest, PublicKey, Signature, VLD0};
 pub use vld0::{hash, validate_public_key, verify, verify_ed25519};
 
@@ -47,4 +51,9 @@ pub(crate) type Secret = zeroize::Zeroizing<[u8; 32]>;
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 #[cfg(test)]
+#[path = "../tests/unit/veilid_reference.rs"]
 mod veilid_reference_tests;
+
+#[cfg(test)]
+#[path = "../tests/unit/profiling.rs"]
+mod profiling;

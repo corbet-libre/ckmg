@@ -5,8 +5,9 @@ G3 device-authority integration are required before production acceptance.
 
 `Keys<S, C, R, A>` is one logical device in one community. It owns a community
 root, PRF-derived device seed, purpose derivation, signed device lineage, pairing,
-root replacement and encrypted custody checkpoints. It contains no global holder
-secret, network, filesystem, membership evaluator, ledger or recovery service.
+root replacement and encrypted custody checkpoints. It contains no network,
+filesystem, membership evaluator, ledger or recovery service. Optional global
+holder custody is installed only in its separately selected wallet scope.
 `Binding.member` is the externally verified cpsd pseudonym, never a root hash.
 
 ## API
@@ -14,19 +15,22 @@ secret, network, filesystem, membership evaluator, ledger or recovery service.
 | Operation | Input and result |
 |---|---|
 | `new`, `state`, `lock` | Inject SecureStore, Clock, Entropy and Authority; start locked; wipe decrypted keys on lock. |
-| `create_scope` | Explicit new-member authorization, PRF, binding and private device metadata; atomically persist deterministic root/device and a Created receipt. Never overwrite an existing record. |
+| `create_scope` | Explicit new-member authorization, PRF, binding and private device metadata; atomically persist a random common root and PRF-derived device and a Created receipt. Never overwrite an existing record. |
 | `unlock` | PRF + community derive the locator and custody key; decrypt exactly the stored logical device, including pending outputs. Absence yields MissingCheckpoint; no implicit creation. |
-| `restore_scope` | Authoritatively absent record, same PRF, exact current lineage, Restore authorization and optional retained root transfer; reconstruct the same logical device and commit a Restored receipt. |
+| `restore_scope` | Authoritatively absent record, same PRF, exact current lineage, Restore authorization and a retained authenticated root transfer; reconstruct the same logical device and commit a Restored receipt. |
 | `request_pairing` | Confirmed lineage, fresh PRF and private metadata; persist a PRF-derived pending device and proof of possession before publishing the challenge. |
 | `authorize_device`, `accept_pairing` | Check recipient proof, injected approval, community/pseudonym/root/epoch/challenge/deadline and exact recipient; commit signed lineage and sealed root before returning a grant. Accept once only. |
 | `renew_pairing` | Renew an expired pending challenge with fresh authority; preserve the device key and require a fresh request/approval. |
 | `rename_device` | Change only the encrypted local name, preserving device keys, public lineage and authority reference. |
 | `adopt_lineage` | Root-signed additions in the same epoch; no rollback, equal-revision replacement or removals. |
-| `prepare_rotation`, `commit`, `cancel_prepared` | Remove another device, derive the next epoch root from this credential's private lineage seed, increment epoch/revision, old-root-sign succession and seal the new root to every survivor. Publish only after durable commit. |
+| `prepare_rotation`, `commit`, `cancel_prepared` | Remove another device, generate a fresh random epoch root while preserving the common identity root, increment epoch/revision, old-root-sign succession and seal the new root to every survivor. Publish only after durable commit. |
 | `apply_rotation` | Verify exact predecessor and both root signatures. Surviving devices import only their own envelope; the removed device erases its root. |
 | `key` | Opaque session-bound purpose handle + device-signed public certificate. No raw key getters. |
 | `sign`, `sign_ed25519` | Sign exact owner transcripts under a purpose capability. VLD0 Ed25519ph and plain Ed25519 have separate APIs and return types. |
 | `with_ed25519_signer` | Fresh asynchronous authority check, then a synchronous, borrowed plain-Ed25519 signer for an upstream engine. Only public key/sign operations; the purpose seed stays inside Keys and the signer cannot escape the callback. |
+| `with_vld0_signer` | Borrow a distinct synchronous VLD0 purpose signer after fresh authorization; retain the original descriptor/value transcript bytes and VLD0_SIGN context. |
+| `with_device_ed25519_signer` | Borrow the actual lineage device signer after fresh authorization for owner formats such as profile publication. Its public key matches Lineage.devices; a purpose key is not a device substitute. |
+| `install_wallet_roots`, `with_passport_holder` | With feature passport, derive the holder seed from retained random-root custody, then lend Wallet-owned PassportSession operations after fresh authorization. No engine/scalar/seed/RNG/passport export. Lock or failed authority drops the engine. |
 | `seal`, `open` | Purpose encryption with context as AAD. Member scope works across paired devices; device scope is independent. |
 | `lineage`, `device_info` | Fresh authorized access to public lineage or local private name/authority reference. Names/references never enter public outputs. |
 | `pending_output`, `acknowledge` | Replay the exact durable receipt; clear only its operation ID after idempotent publication. One outstanding output bounds memory and prevents overwriting unfinished publication. |
@@ -39,11 +43,14 @@ or touches RP IDs, credentials or assertions. See [the adapter move](PASSKEYS.md
 caller must wipe its own source buffer and keep the PRF out of server payloads.
 `cwst` receives only an opaque `StoreCipher` capability. No password/key getter exists.
 
-Wallet custody is separate: `passkey::identity_roots` derives the identity root
-and passport holder seed with independent labels. It offers only public identity
-verification material and domain-bound possession proofs; the holder seed stays
-internal. The existing passport engine must be integrated without exporting it.
-No issuer credential, membership decision or global identifier is fabricated here.
+Wallet custody uses the retained random common identity root, isolated from each
+community's scope. Keys derives a purpose-separated holder seed and hands a private
+copy to `cwlt::PassportHolder::from_seed`, which consumes and wipes it. Wallet owns
+the original `cpsd` engine, its operations and private passport state. Keys lends
+only Wallet's borrowed `PassportSession` after fresh authorization; callers cannot
+replace or extract the engine. Lock/revocation drops the installed engine. Durable
+Wallet checkpoint storage and the real Foyer/global-service flow remain separate
+acceptance obligations. No credential or member binding is fabricated here.
 
 ## States and publication
 
@@ -92,7 +99,7 @@ those proposals. It does not merge authority or decide device-removal policy.
 ## Wire/storage boundaries and limits
 
 - Typed public keys/signatures/hashes: `VLD0:<base64url-no-pad>`, binary `VLD0 || raw`.
-- All owned transcripts have explicit v1 domain labels; canonical tuples serialized
+- All owned transcripts have explicit versioned domain labels; canonical tuples serialized
   by serde_json in fixed field order. Integers only, no floating point or maps. Input
   transport whitespace does not change the canonical signed transcript. Transport
   adapters must bound encoded input before serde allocates; all semantic operations
@@ -104,8 +111,11 @@ those proposals. It does not merge authority or decide device-removal policy.
 - HPKE root envelope: Veilid v1 `0x01 || VLD0 || enc[32] || ciphertext+tag`; context
   binds the complete pairing request/lineage or predecessor/successor/recipient.
 - Custody checkpoint: `ckmg.checkpoint.v1\0 || nonce[24] || ciphertext+tag`.
-  Plaintext is LE-u32 metadata length, versioned metadata JSON, root-present byte,
-  device seed[32], optional root seed[32]. AAD binds header and PRF-derived locator.
+  Plaintext is LE-u32 metadata length, versioned metadata JSON, material format byte,
+  device seed[32], optional epoch root[32] and common identity root[32]. Formats 0/1
+  preserve historical empty/root-only material; format 2 retains both roots. AAD
+  binds the unchanged header and PRF-derived locator. Historical transcript labels
+  are never silently reinterpreted; new lineage/transfer shapes use new versions.
 - Purpose ciphertext: `ckmg.purpose.sealed.v1\0 || nonce[24] || ciphertext+tag`;
   AAD binds binding/epoch/purpose, device for Device scope, and exact caller context.
 - Maximum checkpoint 256 KiB, 128 devices, owner payload/plaintext 1 MiB, context or
@@ -138,28 +148,35 @@ plaintext root export or backup service.
 
 ## Restoration boundaries
 
-The same PRF and stable domain regenerate all personal root inputs even without
-vault records. Authenticated membership binding and current authority metadata are
-still needed: determinism does not prove freshness or authorize a member. The
-original credential regenerates its initial shared root; a credential that last
-rotated the root regenerates its current epoch directly (`RestoreRoot::Derived`).
-No identity or member binding is replaced, and all existing devices in the anchor
-remain unchanged. Checkpoints made before deterministic derivation cannot acquire
-this property retroactively; no migration or fallback is provided for development
-checkpoints containing independently random roots.
+The common identity root is random. No passkey has privileged recordless recovery.
+Every enrolled passkey needs its own retained encrypted copy, either a custody
+checkpoint or an authenticated pairing/current-epoch envelope. Devices refresh
+member-owned DHT records during ordinary use; no operator copy or recovery service
+exists. A network outage is not evidence that every copy is permanently gone.
 
-A distinct paired PRF derives an independent device key; it cannot derive someone
-else's shared root. `RestoreRoot::Paired` opens its authenticated retained grant.
-After another credential rotates, `RestoreRoot::Rotated` opens the surviving
-device's envelope. These signed/ciphertext transfers contain no lineage seed and
-must be retained with authority metadata outside disposable vault data by cvlt.
-Historical pairing expiry does not revoke an already authorized device: restoring
-it requires fresh Restore authority and current inclusion. A stale transfer cannot
-restore a different current root or epoch.
+`RestoreRoot::Paired` opens the exact retained transfer for the current lineage.
+`RestoreRoot::Rotated` opens a surviving device's current epoch envelope. Both carry
+the common identity root under existing upstream HPKE and are then committed under
+the recipient's PRF-derived checkpoint key. Pairing expiry does not invalidate a
+retained enrolled device; fresh authority must still authenticate the exact current
+lineage and refuse revoked devices. Root rotation never changes the common identity.
 
-If every copy of a transferred root envelope is gone, a non-originating credential
-still derives its personal identity/device seeds, but cannot reconstruct that
-shared root. Keys fails closed rather than replacing the member or bypassing
-revocation. The product must resolve transfer retention/reenrollment and the real
-passport-engine integration before claiming the complete all-passkey restore
-promise. See [SECURITY-REVIEW](SECURITY-REVIEW.md).
+Historical root-only checkpoints/transcripts remain readable without relabeling or
+inventing lost material. They cannot silently acquire a new common identity.
+`RestoreRoot::Derived` is retained as a refusing compatibility spelling and always
+returns MissingCheckpoint after the ordinary authority checks. The obsolete public
+PRF-to-identity factory is removed. No migration policy is implied by decoding old
+records; full migration and downstream compound retention require owner integration.
+
+If long absence and loss of every device copy also leave no DHT records, identity
+and data are lost with equal implications for every passkey. The active-member
+restore promise still requires actual Keys/Wallet/Records/Vault round trips and
+network retention measurements. See [SECURITY-REVIEW](SECURITY-REVIEW.md).
+
+Purpose capabilities bind the current epoch. Rotation replaces the epoch root;
+retaining the common identity does not retain every former purpose secret. The
+current checkpoint has no historical-purpose read capability, and the owner-record
+transaction that preserves older encrypted contacts and history across rotation is
+not implemented. Restore tests must include records written before multiple
+rotations and demonstrate their readability after device loss. Identity continuity
+and refusal of stale handles alone do not establish that property.
