@@ -1010,6 +1010,6 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
                 .is_err()
         );
         assert!(!called.get());
-        assert_eq!(keys.state(), State::Locked);
+        assert_eq!(keys.state(), State::Revoked);
     });
 }
