@@ -157,6 +157,29 @@ impl KeyHandle {
     }
 }
 
+/// Synchronous signing access for an upstream engine inside one authorized call.
+/// No secret getter, owned copy or serialization is available. The capability
+/// cannot outlive [`Keys::with_ed25519_signer`]'s callback.
+pub struct Ed25519Signer<'key> {
+    secret: &'key Secret,
+    public_key: [u8; 32],
+}
+
+impl Ed25519Signer<'_> {
+    /// The public key for the already authorized purpose.
+    pub fn public_key(&self) -> &[u8; 32] {
+        &self.public_key
+    }
+
+    /// Sign an exact bounded owner transcript using upstream plain Ed25519.
+    pub fn sign(&self, transcript: &[u8]) -> Result<[u8; 64], Error> {
+        if transcript.len() > MAX_MESSAGE_BYTES {
+            return Err(Error::Limit);
+        }
+        Ok(vld0::sign_ed25519(self.secret, transcript))
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -1193,6 +1216,31 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             &purpose_secret(self.loaded()?, &handle.certificate.purpose, false)?,
             transcript,
         ))
+    }
+
+    /// Check current authority asynchronously, then lend a synchronous purpose
+    /// signer to an engine such as OpenMLS. The callback cannot retain the signer
+    /// or borrow its secret beyond this call. The derived seed is wiped on return
+    /// or unwinding. Fresh authority is checked again on every invocation.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>, handle: &KeyHandle) {
+    /// let retained = keys.with_ed25519_signer(handle, |signer| signer).await;
+    /// # }
+    /// ```
+    pub async fn with_ed25519_signer<T>(
+        &mut self,
+        handle: &KeyHandle,
+        use_signer: impl for<'key> FnOnce(Ed25519Signer<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.check_handle(handle).await?;
+        let secret = purpose_secret(self.loaded()?, &handle.certificate.purpose, false)?;
+        Ok(use_signer(Ed25519Signer {
+            secret: &secret,
+            public_key: *handle.certificate.key.value(),
+        }))
     }
 
     /// Encrypt with a separate symmetric purpose key, authenticating scope, epoch,

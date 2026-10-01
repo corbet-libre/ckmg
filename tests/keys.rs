@@ -953,3 +953,38 @@ fn renew_pairing_and_private_rename_keep_device_identity() {
         assert_eq!(b.device_info().await.unwrap().name(), "new-private-name");
     });
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut keys = machine(&store, &time, &guard, 91);
+        create(&mut keys, &guard, &prf(1), &binding("a")).await;
+        let handle = keys.key(purpose(Scope::Device, "mls")).await.unwrap();
+        let public = *handle.certificate().key.value();
+        let expected = keys.sign_ed25519(&handle, b"OpenMLS transcript").await.unwrap();
+        let actual = keys
+            .with_ed25519_signer(&handle, |signer| {
+                assert_eq!(signer.public_key(), &public);
+                assert_eq!(signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]), Err(Error::Limit));
+                signer.sign(b"OpenMLS transcript").unwrap()
+            })
+            .await
+            .unwrap();
+        assert_eq!(actual, expected);
+        verify_ed25519(&public, b"OpenMLS transcript", &actual).unwrap();
+        assert!(verify_ed25519(&public, b"other transcript", &actual).is_err());
+        guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
+        let called = std::cell::Cell::new(false);
+        assert!(
+            keys.with_ed25519_signer(&handle, |_| called.set(true))
+                .await
+                .is_err()
+        );
+        assert!(!called.get());
+        assert_eq!(keys.state(), State::Locked);
+    });
+}

@@ -26,6 +26,7 @@ secret, network, filesystem, membership evaluator, ledger or recovery service.
 | `apply_rotation` | Verify exact predecessor and both root signatures. Surviving devices import only their own envelope; the removed device erases its root. |
 | `key` | Opaque session-bound purpose handle + device-signed public certificate. No raw key getters. |
 | `sign`, `sign_ed25519` | Sign exact owner transcripts under a purpose capability. VLD0 Ed25519ph and plain Ed25519 have separate APIs and return types. |
+| `with_ed25519_signer` | Fresh asynchronous authority check, then a synchronous, borrowed plain-Ed25519 signer for an upstream engine. Only public key/sign operations; the purpose seed stays inside Keys and the signer cannot escape the callback. |
 | `seal`, `open` | Purpose encryption with context as AAD. Member scope works across paired devices; device scope is independent. |
 | `lineage`, `device_info` | Fresh authorized access to public lineage or local private name/authority reference. Names/references never enter public outputs. |
 | `pending_output`, `acknowledge` | Replay the exact durable receipt; clear only its operation ID after idempotent publication. One outstanding output bounds memory and prevents overwriting unfinished publication. |

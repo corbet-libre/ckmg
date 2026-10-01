@@ -24,7 +24,9 @@ mod typed;
 mod vld0;
 
 pub use error::Error;
-pub use keys::{Change, DeviceInfo, KeyHandle, Keys, OperationId, Receipt, RestoreRoot, State};
+pub use keys::{
+    Change, DeviceInfo, Ed25519Signer, KeyHandle, Keys, OperationId, Receipt, RestoreRoot, State,
+};
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
 };
