@@ -965,11 +965,17 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         create(&mut keys, &guard, &prf(1), &binding("a")).await;
         let handle = keys.key(purpose(Scope::Device, "mls")).await.unwrap();
         let public = *handle.certificate().key.value();
-        let expected = keys.sign_ed25519(&handle, b"OpenMLS transcript").await.unwrap();
+        let expected = keys
+            .sign_ed25519(&handle, b"OpenMLS transcript")
+            .await
+            .unwrap();
         let actual = keys
             .with_ed25519_signer(&handle, |signer| {
                 assert_eq!(signer.public_key(), &public);
-                assert_eq!(signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]), Err(Error::Limit));
+                assert_eq!(
+                    signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
                 signer.sign(b"OpenMLS transcript").unwrap()
             })
             .await
@@ -977,6 +983,25 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         assert_eq!(actual, expected);
         verify_ed25519(&public, b"OpenMLS transcript", &actual).unwrap();
         assert!(verify_ed25519(&public, b"other transcript", &actual).is_err());
+        let vld0 = keys
+            .with_vld0_signer(&handle, |signer| {
+                assert_eq!(signer.public_key(), &public);
+                assert_eq!(
+                    signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
+                signer.sign(b"OpenMLS transcript").unwrap()
+            })
+            .await
+            .unwrap();
+        verify(
+            &PublicKey::new(VLD0, public),
+            b"OpenMLS transcript",
+            &Signature::new(VLD0, vld0),
+        )
+        .unwrap();
+        assert_ne!(actual, vld0);
+        assert!(verify_ed25519(&public, b"OpenMLS transcript", &vld0).is_err());
         guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
         let called = std::cell::Cell::new(false);
         assert!(

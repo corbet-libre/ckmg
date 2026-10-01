@@ -180,6 +180,25 @@ impl Ed25519Signer<'_> {
     }
 }
 
+/// Scoped synchronous Veilid VLD0 signer, distinct from plain Ed25519.
+/// It borrows purpose custody only for one fresh-authorized callback.
+pub struct Vld0Signer<'key>(Ed25519Signer<'key>);
+
+impl Vld0Signer<'_> {
+    /// The public key for the already authorized purpose.
+    pub fn public_key(&self) -> &[u8; 32] {
+        self.0.public_key()
+    }
+
+    /// Sign exact owner bytes using upstream Ed25519ph and `VLD0_SIGN`.
+    pub fn sign(&self, data: &[u8]) -> Result<[u8; 64], Error> {
+        if data.len() > MAX_MESSAGE_BYTES {
+            return Err(Error::Limit);
+        }
+        Ok(*vld0::sign(self.0.secret, data)?.value())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
@@ -1241,6 +1260,25 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             secret: &secret,
             public_key: *handle.certificate.key.value(),
         }))
+    }
+
+    /// Lend a synchronous VLD0 purpose signer for original descriptor/value bytes.
+    /// Authorization, lifetime and zeroization match `with_ed25519_signer`.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>, handle: &KeyHandle) {
+    /// let retained = keys.with_vld0_signer(handle, |signer| signer).await;
+    /// # }
+    /// ```
+    pub async fn with_vld0_signer<T>(
+        &mut self,
+        handle: &KeyHandle,
+        use_signer: impl for<'key> FnOnce(Vld0Signer<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.with_ed25519_signer(handle, |signer| use_signer(Vld0Signer(signer)))
+            .await
     }
 
     /// Encrypt with a separate symmetric purpose key, authenticating scope, epoch,
