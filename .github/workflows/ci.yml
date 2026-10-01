@@ -28,7 +28,7 @@ jobs:
         date -u +%FT%TZ >> resolver.txt
 
         sha256sum Cargo.lock >> resolver.txt'
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@v7.0.1
       with:
         name: resolved-lock
         path: 'Cargo.lock
@@ -103,7 +103,7 @@ jobs:
         cargo test --locked --target wasm32-unknown-unknown
 
         '
-    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
       if: always()
       with:
         name: dependency-lock
@@ -117,7 +117,7 @@ jobs:
       run: 'cargo fmt --all
 
         git diff --binary > formatting.patch'
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@v7.0.1
       if: failure()
       with:
         name: formatting-check
@@ -143,7 +143,7 @@ jobs:
       run: 'cargo fmt --all
 
         git diff --binary > formatting.patch'
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@v7.0.1
       if: failure()
       with:
         name: formatting-dependency-policy
@@ -181,7 +181,7 @@ jobs:
         --ignore-filename-regex ''(/tests/|/tests\.rs$)'' --json --output-path coverage.json'
     - name: Require every reachable line and branch
       run: python3 .github/check-coverage.py coverage.json
-    - uses: actions/upload-artifact@v7
+    - uses: actions/upload-artifact@v7.0.1
       if: always()
       with:
         name: coverage
