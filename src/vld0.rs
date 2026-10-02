@@ -118,13 +118,13 @@ pub fn hash(data: &[u8]) -> HashDigest {
     HashDigest::new(VLD0, *blake3::hash(data).as_bytes())
 }
 
-fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
+pub(crate) fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
     Ok(verifying_key(key)?.to_montgomery().to_bytes())
 }
 
 /// The X25519 secret an Ed25519 seed expands to: the raw first half of SHA-512(seed),
 /// clamped by X25519 itself (as in Veilid; not the reduced scalar).
-fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
+pub(crate) fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
     let mut expanded: [u8; 64] = Sha512::new()
         .chain_update(secret.as_slice())
         .finalize()

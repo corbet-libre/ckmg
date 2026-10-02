@@ -253,6 +253,13 @@ impl DeviceEd25519Signer<'_> {
         self.0.public_key()
     }
 
+    /// X25519 public key of this same authorized device, using the maintained
+    /// VLD0 conversion already used by pairing. Profile signs it explicitly;
+    /// peers must verify that signed field through Guard before HPKE release.
+    pub fn hpke_public_key(&self) -> Result<[u8; 32], Error> {
+        vld0::x25519_public(&PublicKey::new(VLD0, *self.public_key()))
+    }
+
     /// Sign a bounded owner transcript with the actual device key.
     pub fn sign(&self, transcript: &[u8]) -> Result<[u8; 64], Error> {
         self.0.sign(transcript)
@@ -421,6 +428,18 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         statement: Option<[u8; 32]>,
         evidence: &[u8],
     ) -> Result<(), Error> {
+        self.authorize_with_signing(action, target, statement, evidence, None)
+            .await
+    }
+
+    async fn authorize_with_signing(
+        &mut self,
+        action: Action,
+        target: Option<PublicKey>,
+        statement: Option<[u8; 32]>,
+        evidence: &[u8],
+        signing: Option<crate::DeviceSigning<'_>>,
+    ) -> Result<(), Error> {
         if evidence.len() > 4096 {
             return Err(Error::Limit);
         }
@@ -448,6 +467,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action,
             target,
             statement,
+            signing,
             now,
             evidence,
         })
@@ -541,6 +561,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action: Action::Create,
             target: None,
             statement: None,
+            signing: None,
             now,
             evidence,
         })
@@ -594,6 +615,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action: Action::Restore,
             target: None,
             statement: Some(anchor.digest()?),
+            signing: None,
             now,
             evidence,
         })
@@ -745,6 +767,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action: Action::RequestPairing,
             target: None,
             statement: Some(anchor.digest()?),
+            signing: None,
             now,
             evidence,
         })
@@ -800,6 +823,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action: Action::RequestPairing,
             target: None,
             statement: Some(anchor.digest()?),
+            signing: None,
             now,
             evidence,
         })
@@ -953,6 +977,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 action: Action::Rotate,
                 target: Some(rotation.revoked),
                 statement: Some(previous.digest()?),
+                signing: None,
                 now,
                 evidence,
             })
@@ -1016,6 +1041,52 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     pub async fn lineage(&mut self) -> Result<Lineage, Error> {
         self.authorize(Action::Use, None, None, &[]).await?;
         Ok(self.loaded()?.metadata.lineage.clone())
+    }
+
+    /// Read only the current lineage device key under fresh authority. This does
+    /// not lend a signer or consume a signing intent.
+    pub async fn device_public_key(&mut self) -> Result<PublicKey, Error> {
+        self.authorize(Action::Use, None, None, &[]).await?;
+        self.refresh().await?;
+        self.now()?;
+        Ok(vld0::public_key(&self.loaded()?.material.device))
+    }
+
+    /// Sign exactly the borrowed original owner transcript after distinct,
+    /// one-use intent and current G3 authorization. No generic signer escapes.
+    /// The trusted composer supplies the original exclusive grant deadline and
+    /// retains its IntentGuard through the downstream operation, including waits.
+    pub async fn sign_device_ed25519(
+        &mut self,
+        transcript: &[u8],
+        expires: u64,
+    ) -> Result<[u8; 64], Error> {
+        self.writable()?;
+        self.authorize_with_signing(
+            Action::SignDeviceEd25519,
+            None,
+            None,
+            &[],
+            Some(crate::DeviceSigning {
+                transcript,
+                expires,
+            }),
+        )
+        .await?;
+        // Authorization can suspend; refuse a replaced/locked checkpoint and
+        // expired or regressed clock before touching the device signer. Exact
+        // local intent has already been consumed even when these checks refuse.
+        self.refresh().await?;
+        if self.now()? >= expires {
+            self.fail_closed(State::Locked);
+            return Err(Error::Expired);
+        }
+        let secret = &self.loaded()?.material.device;
+        Ed25519Signer {
+            secret,
+            public_key: *vld0::public_key(secret).value(),
+        }
+        .sign(transcript)
     }
 
     /// Authorized local access to private device metadata; never included in network outputs.
@@ -1284,6 +1355,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             action: Action::Adopt,
             target: Some(rotation.revoked),
             statement: Some(digest(b"ckmg.rotation.digest.v1\0", rotation)?),
+            signing: None,
             now,
             evidence,
         })
@@ -1476,6 +1548,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Lend the actual lineage device signer for upstream plain-Ed25519 formats
     /// such as profile publication. Its public key is a member of `Lineage.devices`,
     /// unlike a purpose key. Current server/device authority is checked first.
+    /// This requests LendDeviceSigner, never metadata Use or exact transcript
+    /// admission. The authority must explicitly allow this broader owner operation.
     /// This capability is never a replacement for the server's G3 authorization.
     ///
     /// ```compile_fail
@@ -1490,7 +1564,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         use_signer: impl for<'key> FnOnce(DeviceEd25519Signer<'key>) -> T,
     ) -> Result<T, Error> {
         self.writable()?;
-        self.authorize(Action::Use, None, None, &[]).await?;
+        self.authorize(Action::LendDeviceSigner, None, None, &[])
+            .await?;
         let secret = &self.loaded()?.material.device;
         Ok(use_signer(DeviceEd25519Signer(Ed25519Signer {
             secret,
@@ -1521,6 +1596,71 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         Ok(use_identity(&roots))
     }
 
+    /// Lend original Profile signing and Envelope custody after distinct current
+    /// authority and post-await checkpoint/clock checks. Private buffers are
+    /// zeroized when this synchronous callback ends; ReadKey cannot escape it.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// # keys: &mut Keys<S,C,R,A>) {
+    /// let retained = keys.with_profile_custody(|_, custody| custody).await;
+    /// # }
+    /// ```
+    #[cfg(feature = "profile-envelope")]
+    pub async fn with_profile_custody<T>(
+        &mut self,
+        consume: impl for<'key> FnOnce(DeviceEd25519Signer<'key>, cnvl::Custodian<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.writable()?;
+        self.authorize(Action::LendProfileCustody, None, None, &[])
+            .await?;
+        self.refresh().await?;
+        self.now()?;
+        let current = self.loaded()?;
+        let binding = &current.metadata.lineage.binding;
+        let common = current
+            .material
+            .identity
+            .as_ref()
+            .ok_or(Error::MissingCheckpoint)?;
+        let wrapping = passkey::profile_storage_key(common, binding.community())?;
+        let hpke = vld0::x25519_secret(&current.material.device);
+        let public = *vld0::public_key(&current.material.device).value();
+        let custody = cnvl::Custodian::from_keys(
+            &hpke,
+            &wrapping,
+            binding.community(),
+            binding.member(),
+            public,
+        )
+        .map_err(|_| Error::Crypto)?;
+        let signer = DeviceEd25519Signer(Ed25519Signer {
+            secret: &current.material.device,
+            public_key: public,
+        });
+        Ok(consume(signer, custody))
+    }
+
+    /// Migrate only an original encrypted v1 Profile key to Envelope's immutable
+    /// common-root storage purpose. No raw profile/wrapping key crosses this API.
+    /// Profile must atomically persist the returned encrypted bytes before use.
+    #[cfg(feature = "profile-envelope")]
+    pub async fn migrate_profile_key(
+        &mut self,
+        legacy: &passkey::StoreCipher,
+        context: cnvl::Context,
+        wrapped: &[u8],
+    ) -> Result<cnvl::WrappedReadKey, Error> {
+        self.with_profile_custody(|_, custody| {
+            custody
+                .restore_legacy_store(context, wrapped, legacy.envelope_legacy_key())
+                .and_then(|key| key.wrap())
+                .map_err(|_| Error::Crypto)
+        })
+        .await?
+    }
+
     /// Lend one opaque holder initializer after fresh current device authority.
     /// Wallet consumes it; Keys never retains a Wallet engine or returns seed bytes.
     /// The borrowed capability cannot escape this call.
@@ -1539,6 +1679,30 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     ) -> Result<T, Error> {
         self.with_identity(|identity| consume(identity.holder_seed()))
             .await
+    }
+
+    /// Initialize the original pure Wallet engine under fresh current custody.
+    /// It retains an immutable purpose key; no root/seed/RNG callback or rekey
+    /// operation is exposed. Initialization grants no accepted balance or Wave.
+    /// Upper Wallet consumes the exact types reexported in `wallet_engine`.
+    #[cfg(feature = "wallet-engine")]
+    pub async fn wallet_engine(&mut self) -> Result<crate::wallet_engine::Engine, Error> {
+        self.with_identity(|identity| identity.wallet_engine())
+            .await?
+    }
+
+    /// Restore only the engine's authenticated original ciphertext inside fresh
+    /// Keys custody. Wallet must still reconcile its original Store and accepted
+    /// state; successful sealing/opening alone grants no release authority.
+    #[cfg(feature = "wallet-engine")]
+    pub async fn restore_wallet_engine(
+        &mut self,
+        sealed: &crate::wallet_engine::Sealed,
+    ) -> Result<crate::wallet_engine::Engine, Error> {
+        self.wallet_engine()
+            .await?
+            .restored(sealed)
+            .map_err(|_| Error::Open)
     }
 
     /// Encrypt bounded data with current device, epoch, purpose and caller context.

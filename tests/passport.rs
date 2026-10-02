@@ -22,6 +22,7 @@ fn holder_rederives_identity_and_requires_exact_current_wallet_custody() {
         let holder = keys
             .with_holder_seed(|seed| seed.into_passport_holder())
             .await
+            .unwrap()
             .unwrap();
         let community = cpsd::CommunityId::new(b"community-a").unwrap();
         let (nym, tag) = {
@@ -34,6 +35,7 @@ fn holder_rederives_identity_and_requires_exact_current_wallet_custody() {
         let mut holder = keys
             .with_holder_seed(|seed| seed.into_passport_holder())
             .await
+            .unwrap()
             .unwrap();
         let same = (holder.pseudonym(&community), holder.issuer_tag());
         assert_eq!(same, (nym, tag));
@@ -74,12 +76,65 @@ fn holder_rederives_identity_and_requires_exact_current_wallet_custody() {
         let blind = issuer
             .issue_blind(&mut rng, &issuance, &challenge, &attrs)
             .unwrap();
+        let pending = holder.seal(&mut rng).unwrap();
+        drop(holder);
+        keys.lock();
+        keys.unlock(&prf(1), "wallet").await.unwrap();
+        let mut holder = keys
+            .with_holder_seed(|seed| seed.open_passport_holder(&pending))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut damaged = pending.as_bytes().to_vec();
+        *damaged.last_mut().unwrap() ^= 1;
+        let damaged = cpsd::SealedHolder::from_bytes(&damaged).unwrap();
+        assert!(
+            keys.with_holder_seed(|seed| seed.open_passport_holder(&damaged))
+                .await
+                .unwrap()
+                .is_err()
+        );
         holder.finish_issuance(&blind).unwrap();
         assert_eq!(holder.attributes(), Some(&attrs));
         let proof = holder.present(&mut rng, &expected, &signed, 1000).unwrap();
         assert_eq!(
             cpsd::verify(&mut rng, &[issuer.public_key().clone()], &request, &proof).unwrap(),
             nym
+        );
+        let sealed = holder.seal(&mut rng).unwrap();
+        let peer_store = Memory::default();
+        let mut peer = machine(&peer_store, &time, &guard, 74);
+        pair(&mut keys, &mut peer, &guard, &prf(2)).await;
+        let peer_holder = peer
+            .with_holder_seed(|seed| seed.open_passport_holder(&sealed))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(peer_holder.attributes(), Some(&attrs));
+        let proof = peer_holder
+            .present(&mut rng, &expected, &signed, 1000)
+            .unwrap();
+        assert_eq!(
+            cpsd::verify(&mut rng, &[issuer.public_key().clone()], &request, &proof).unwrap(),
+            nym
+        );
+        drop(peer_holder);
+        let unrelated_store = Memory::default();
+        let unrelated_guard = Guard::default();
+        let mut unrelated = machine(&unrelated_store, &time, &unrelated_guard, 75);
+        create(
+            &mut unrelated,
+            &unrelated_guard,
+            &prf(3),
+            &binding("wallet"),
+        )
+        .await;
+        assert!(
+            unrelated
+                .with_holder_seed(|seed| seed.open_passport_holder(&sealed))
+                .await
+                .unwrap()
+                .is_err()
         );
         holder.cancel_issuance();
         drop(holder); // The composing Wallet owns wiping its engine on lock.

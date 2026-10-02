@@ -194,3 +194,36 @@ The thread-confined intent_channel has separate Door admission and Authority ver
 Every new durable Keys Receipt additionally carries a VLD0 device attestation over the exact operation ID and complete Change. The signature is created internally before checkpoint encryption and committed atomically with that output. Receipt::attested_lineage checks that signature, original root-signed lineage and author inclusion; it deliberately grants no active-passkey/currentness authority. Vault must additionally verify an original passkey assertion over Receipt::passkey_challenge against the Policy-authenticated credential descriptor and current offline passkey revocations, then apply the reviewed higher-epoch/smaller-hash rule among valid observations. A delegated device signature does not satisfy that requirement. Historical receipts remain readable but an absent attestation cannot authorize a new lineage publication. Keys State, DeviceInfo, Binding and Lineage expose owner Serde/JsonSchema metadata for the Door, with public cryptographic types described as their actual serialized strings (never raw arrays).
 
 Keys::retained_checkpoint exports only the exact already-durable PRF-encrypted Keys checkpoint after current authority and generation verification. RestoreRoot::Checkpoint reuses that existing format and AEAD; it requires authoritative local absence plus independently authenticated current lineage/device authority, validates all retained material, refuses wrong PRF/scope, revoked/pending devices, root/epoch/identity mismatch and clock rollback. It can restore the original passkey's random root just like every enrolled passkey, but cannot restore without a retained copy. Vault may place this opaque wrapped payload in its passkey record after compression/padding; packed-size refusal is a retention failure, never pruning or a new identity. No MLS ratchet or Wallet state is copied by this Keys operation.
+
+
+### Exact device signing admission
+
+`device_public_key().await` reads public metadata under current `Action::Use`
+authority without lending a signer. `sign_device_ed25519(transcript, expires).await`
+requests `Action::SignDeviceEd25519` with `Authorization::signing =
+Some(DeviceSigning { transcript, expires })`. The caller passes original immutable
+owner-prepared bytes and the original exclusive local grant deadline; no new
+digest, wire envelope or callback is introduced. `AdmittedCommand::transcript`
+contains these exact bytes. Other admitted actions require `transcript: None`.
+The original intent channel consumes one attempt, including byte/deadline/action
+mismatch, and remains reserved until its guard drops. The trusted authority must
+validate actual current G3, ensure the deadline does not outlive that authority,
+recheck deadlines after its awaits, then consume intent. Intent alone is never G3.
+Keys rechecks the actual checkpoint generation and clock after authorization and
+refuses an expired deadline before signing those same bytes. No signature leaves
+on refusal; the guard stays in the composer through remote child completion.
+
+The existing synchronous Profile signer lender now requests the distinct
+`Action::LendDeviceSigner`. `Use` reads or an exact signing admission cannot grant
+that broader capability; a production adapter must explicitly admit its original
+owner operation or refuse it. Board consumers must use the narrow signing method.
+
+With feature `wallet-engine`, `Keys::wallet_engine().await` freshly authorizes
+custody and constructs the original internal Wallet Engine with its retained
+common-root-derived balance seed and separate immutable sealing key.
+`restore_wallet_engine(&wallet_engine::Sealed).await` restores only through that
+original bound engine. `ckmg::wallet_engine` reexports the exact dependency crate,
+so upper Wallet can use those same types when its own workspace is a different
+Cargo source identity. No seed/RNG/codec callback, secret getter, rekey or arbitrary
+caller context is added. Construction/opening is not accepted balance, a Wave,
+a proof or a durable Store adoption; those remain original Wallet responsibilities.

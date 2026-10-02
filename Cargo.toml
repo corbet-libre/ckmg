@@ -25,9 +25,13 @@ crate-type = ["rlib"]
 [features]
 default = []
 passport = ["dep:cpsd"]
+wallet-engine = ["dep:cwlt-engine"]
+profile-envelope = ["dep:cnvl"]
 native-records = ["dep:cvln"]
 
 [dependencies]
+cnvl = { git = "https://github.com/corbet-foss/cnvl", branch = "main", optional = true }
+cwlt-engine = { git = "https://github.com/corbet-foss/cwlt", branch = "main", optional = true }
 cpsd = { git = "https://github.com/corbet-foss/cpsd", branch = "main", default-features = false, optional = true }
 # The crypto crates Veilid's VLD0 cryptosystem uses, at the versions Veilid uses.
 ed25519-dalek = { version = "3.0.0", features = ["digest", "zeroize"] }

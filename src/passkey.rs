@@ -16,6 +16,9 @@ const RING_KEY_INFO: &[u8] = b"ckmg.keyring-key.v1\0";
 const LOCATION_INFO: &[u8] = b"ckmg.vault-location.v1\0";
 const IDENTITY_INFO: &[u8] = b"ckmg.identity-root.v1\0";
 const HOLDER_INFO: &[u8] = b"ckmg.passport-holder-seed.v1\0";
+const HOLDER_SEAL_INFO: &[u8] = b"ckmg.wallet-holder-seal.v1\0";
+const BALANCE_SEED_INFO: &[u8] = b"ckmg.wallet-balance-seed.v1\0";
+const BALANCE_SEAL_INFO: &[u8] = b"ckmg.wallet-balance-seal.v1\0";
 const DEVICE_INFO: &[u8] = b"ckmg.device-lineage-seed.v1\0";
 
 /// Opaque 32-byte input from device-side Passkeys. Wiped on drop; no Debug,
@@ -43,6 +46,9 @@ pub struct IdentityRoots {
     identity: Secret,
     // Reserved for the upstream holder engine, never exposed as bytes or an RNG.
     passport_holder_seed: Secret,
+    holder_sealing_key: Secret,
+    balance_seed: Secret,
+    balance_sealing_key: Secret,
 }
 
 impl IdentityRoots {
@@ -57,7 +63,19 @@ impl IdentityRoots {
 
     #[cfg(feature = "passport")]
     pub(crate) fn holder_seed(&self) -> HolderSeed<'_> {
-        HolderSeed(&self.passport_holder_seed)
+        HolderSeed {
+            seed: &self.passport_holder_seed,
+            sealing_key: &self.holder_sealing_key,
+            wallet_context: self.domain.as_bytes(),
+        }
+    }
+
+    #[cfg(feature = "wallet-engine")]
+    pub(crate) fn wallet_engine(&self) -> Result<cwlt_engine::Engine, Error> {
+        let mut seed = Zeroizing::new(*self.balance_seed);
+        let mut key = Zeroizing::new(*self.balance_sealing_key);
+        cwlt_engine::Engine::from_seed_and_sealing_key(&mut seed, &mut key, self.domain.as_bytes())
+            .map_err(|_| Error::Encoding)
     }
 
     /// Public identity verification key derived from the retained common random root.
@@ -86,6 +104,9 @@ impl Drop for IdentityRoots {
         use zeroize::Zeroize;
         self.identity.zeroize();
         self.passport_holder_seed.zeroize();
+        self.holder_sealing_key.zeroize();
+        self.balance_seed.zeroize();
+        self.balance_sealing_key.zeroize();
     }
 }
 crate::lineage::redacted!(IdentityRoots);
@@ -96,10 +117,16 @@ crate::lineage::redacted!(IdentityRoots);
 fn identity_roots(prf: &PrfOutput, wallet_domain: &str) -> Result<IdentityRoots, Error> {
     let identity = expand(prf, IDENTITY_INFO, wallet_domain)?;
     let passport_holder_seed = expand(prf, HOLDER_INFO, wallet_domain)?;
+    let holder_sealing_key = expand(prf, HOLDER_SEAL_INFO, wallet_domain)?;
+    let balance_seed = expand(prf, BALANCE_SEED_INFO, wallet_domain)?;
+    let balance_sealing_key = expand(prf, BALANCE_SEAL_INFO, wallet_domain)?;
     Ok(IdentityRoots {
         domain: wallet_domain.into(),
         identity,
         passport_holder_seed,
+        holder_sealing_key,
+        balance_seed,
+        balance_sealing_key,
     })
 }
 
@@ -107,21 +134,48 @@ pub(crate) fn device_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Er
     expand(prf, DEVICE_INFO, community)
 }
 
+#[cfg(feature = "profile-envelope")]
+pub(crate) fn profile_storage_key(common: &Secret, community: &str) -> Result<Secret, Error> {
+    expand(
+        &PrfOutput(common.clone()),
+        b"ckmg.profile-envelope-storage.v2\0",
+        community,
+    )
+}
+
 /// One-use holder-seed capability borrowed from freshly authorized Keys.
 /// No byte/RNG getter, callback, Clone, Debug or serialization is implemented.
 /// Wallet consumes it to initialize the maintained Pseudonyms engine; the engine
 /// and every subsequent holder operation belong to Wallet, never Keys.
 #[cfg(feature = "passport")]
-pub struct HolderSeed<'key>(&'key Secret);
+pub struct HolderSeed<'key> {
+    seed: &'key Secret,
+    sealing_key: &'key Secret,
+    wallet_context: &'key [u8],
+}
 
 #[cfg(feature = "passport")]
 impl HolderSeed<'_> {
     /// Initialize the existing opaque holder, consuming the capability without
     /// exposing the seed. This produces no credential or membership authority.
     /// Wallet must load its authenticated checkpoint and retain lifecycle custody.
-    pub fn into_passport_holder(self) -> cpsd::OpaqueHolder {
-        let mut seed = Zeroizing::new(**self.0);
-        cpsd::OpaqueHolder::from_seed(&mut seed)
+    pub fn into_passport_holder(self) -> Result<cpsd::OpaqueHolder, Error> {
+        let mut seed = Zeroizing::new(**self.seed);
+        let mut key = Zeroizing::new(**self.sealing_key);
+        cpsd::OpaqueHolder::from_seed_and_sealing_key(&mut seed, &mut key, self.wallet_context)
+            .map_err(|_| Error::Encoding)
+    }
+
+    /// Open the original CPSD sealed holder under freshly authorized wallet custody.
+    /// The immutable sealing key is selected only here; neither it nor a plaintext
+    /// codec escapes. Wallet must still reconcile its actual compound checkpoint.
+    pub fn open_passport_holder(
+        self,
+        sealed: &cpsd::SealedHolder,
+    ) -> Result<cpsd::OpaqueHolder, Error> {
+        self.into_passport_holder()?
+            .restored(sealed)
+            .map_err(|_| Error::Open)
     }
 }
 
@@ -130,6 +184,10 @@ impl HolderSeed<'_> {
 pub struct StoreCipher(Secret);
 
 impl StoreCipher {
+    #[cfg(feature = "profile-envelope")]
+    pub(crate) fn envelope_legacy_key(&self) -> &[u8; 32] {
+        &self.0
+    }
     /// Wrap a bounded storage secret or record with authenticated owner context.
     pub fn seal(
         &self,

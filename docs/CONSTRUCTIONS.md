@@ -184,3 +184,28 @@ purpose-encryption derivation. This separates stream-cipher keys from AEAD keys.
 Existing persisted purpose/checkpoint transcripts are unchanged. The derived
 secret and capability exist only inside one freshly authorized callback. No
 full record-key codec, raw read secret, or secret accessor is added.
+
+## Opaque holder sealing
+
+The stable common identity retained through equal-passkey pairing and root rotations
+is also the input for a separate HKDF-SHA256 purpose. Reuse salt
+`ckmg.passkey-prf.v1`, with info `ckmg.wallet-holder-seal.v1\0` followed by the
+exact authenticated wallet domain. The 32-byte result stays private to Keys and
+is transferred only into CPSD's key-bound constructor/open operation. It is never
+derived from an individual authenticator PRF. Existing identity and holder-seed
+labels/bytes are unchanged. The CPSD holder cannot receive a replacement sealing
+key from Wallet. CPSD owns its maintained AEAD and original private codecs;
+The wallet domain is also bound immutably as CPSD authenticated context at
+construction. Wallet owns durable compound adoption of ciphertext through Storage receipts.
+
+The internal original Wallet balance engine uses two additional HKDF-SHA256
+labels under the existing salt `ckmg.passkey-prf.v1`: `ckmg.wallet-balance-seed.v1`
+plus NUL and actual wallet domain, and `ckmg.wallet-balance-seal.v1` plus NUL and
+that domain. Input is the retained random common identity root, never an individual
+passkey PRF. Existing identity/passport labels and stored formats stay unchanged.
+Both derived buffers stay private/zeroizing; the original engine constructor wipes
+its temporary inputs and permanently binds the actual wallet context and cipher.
+The engine owns its format, maintained AEAD and random nonces. Keys reexports its
+original package types; upper Wallet must not mix them with a second local-path
+instance. Qualification order is internal engine on real Wallet main, then Keys,
+then upper Wallet Store integration, with no Cargo patch or source alias.

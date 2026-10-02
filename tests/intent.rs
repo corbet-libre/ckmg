@@ -12,6 +12,7 @@ fn command() -> AdmittedCommand {
         epoch: 3,
         target: Some(PublicKey::new(VLD0, [3; 32])),
         statement: Some([4; 32]),
+        transcript: None,
         expires: 1200,
     }
 }
@@ -24,6 +25,7 @@ fn request(binding: &Binding) -> Authorization<'_> {
         action: Action::Pair,
         target: Some(PublicKey::new(VLD0, [3; 32])),
         statement: Some([4; 32]),
+        signing: None,
         now: 1100,
         evidence: &[],
     }
@@ -138,4 +140,70 @@ fn stale_guard_cannot_cancel_later_admission_and_invalid_input_cannot_reserve() 
         .unwrap();
     drop(current);
     admission.cancel();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender() {
+    for case in 0..6 {
+        let (mut admission, mut verifier) = intent_channel();
+        let mut command = command();
+        command.action = Action::SignDeviceEd25519;
+        command.target = None;
+        command.statement = None;
+        command.transcript = Some(b"original owner transcript".to_vec());
+        let _guard = admission.admit(command, 1000).unwrap();
+        let binding = Binding::new("garden", "member").unwrap();
+        let mut request = request(&binding);
+        request.action = Action::SignDeviceEd25519;
+        request.target = None;
+        request.statement = None;
+        request.signing = Some(DeviceSigning {
+            transcript: b"original owner transcript",
+            expires: 1200,
+        });
+        match case {
+            0 => {}
+            1 => request.signing.as_mut().unwrap().transcript = b"different transcript",
+            2 => request.signing.as_mut().unwrap().expires = 1201,
+            3 => request.signing = None,
+            4 => request.action = Action::LendDeviceSigner,
+            _ => request.action = Action::Use,
+        }
+        assert_eq!(
+            verifier
+                .consume(&request, "https://garden.example.com")
+                .is_ok(),
+            case == 0
+        );
+        request.action = Action::SignDeviceEd25519;
+        request.signing = Some(DeviceSigning {
+            transcript: b"original owner transcript",
+            expires: 1200,
+        });
+        assert!(
+            verifier
+                .consume(&request, "https://garden.example.com")
+                .is_err()
+        );
+    }
+    let (mut admission, _) = intent_channel();
+    for case in 0..5 {
+        let mut command = command();
+        command.action = Action::SignDeviceEd25519;
+        command.target = None;
+        command.statement = None;
+        command.transcript = Some(b"original owner transcript".to_vec());
+        match case {
+            0 => command.transcript = None,
+            1 => command.action = Action::Use,
+            2 => command.target = Some(PublicKey::new(VLD0, [3; 32])),
+            3 => command.statement = Some([1; 32]),
+            _ => command.transcript = Some(vec![0; MAX_MESSAGE_BYTES + 1]),
+        }
+        assert!(matches!(
+            admission.admit(command, 1000),
+            Err(Error::Encoding)
+        ));
+    }
 }

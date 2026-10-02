@@ -95,12 +95,31 @@ pub enum Action {
     RequestPairing,
     /// Use current device authority for signing, encryption or key handles.
     Use,
+    /// Sign only the exact original bytes and deadline in `Authorization::signing`.
+    SignDeviceEd25519,
+    /// Lend the broad synchronous Profile signer; requires separate explicit admission.
+    /// Metadata reads and exact Board signing must never authorize this capability.
+    LendDeviceSigner,
+    /// Lend Profile signing and immutable Envelope custody together. This needs
+    /// original Profile/Exchange admission, never a metadata or Board-sign intent.
+    LendProfileCustody,
     /// Approve a pending device after authenticated, user-confirmed pairing.
     Pair,
     /// Remove a device and replace the root, without resetting the member pseudonym.
     Rotate,
     /// Adopt an authenticated lineage or root update.
     Adopt,
+}
+
+/// Original owner signing bytes and exclusive deadline. Input, not authority.
+/// The trusted adapter must verify that this deadline is within its current G3
+/// authority and local grant, then consume the exact admitted command once.
+#[derive(Clone, Copy)]
+pub struct DeviceSigning<'a> {
+    /// Exact bounded owner transcript; no digest or alternative framing.
+    pub transcript: &'a [u8],
+    /// Exclusive Unix-second deadline from the trusted local admission.
+    pub expires: u64,
 }
 
 /// Authorization input, not a verified capability. Debug omits all identifiers.
@@ -122,6 +141,8 @@ pub struct Authorization<'a> {
     pub target: Option<PublicKey>,
     /// Digest of the exact pairing request or transition, where applicable.
     pub statement: Option<[u8; 32]>,
+    /// Present only for `SignDeviceEd25519`; bytes are borrowed through authorization.
+    pub signing: Option<DeviceSigning<'a>>,
     /// Current injected time.
     pub now: u64,
     /// Opaque, bounded authority evidence; never persisted or logged by ckmg.
@@ -140,7 +161,10 @@ impl std::fmt::Debug for Authorization<'_> {
 ///
 /// Check origin, pseudonym, current root/epoch, exact device revocation and live
 /// passkey authority. Pair/Rotate must verify the bound user approval; possession of
-/// a public key or a pairing proof alone is insufficient. Refuse if current authority
+/// a public key or a pairing proof alone is insufficient. SignDeviceEd25519 requires
+/// exact one-use transcript/deadline admission; LendDeviceSigner requires its own
+/// explicit owner operation and must never follow from Use or signing admission.
+/// Recheck authority deadlines after waits. Refuse if current authority
 /// cannot be established. No permissive implementation ships with this library.
 pub trait Authority {
     /// Authorize this exact request or refuse with a coarse error.

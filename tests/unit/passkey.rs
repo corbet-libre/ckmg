@@ -48,6 +48,18 @@ fn hkdf_derivation_matches_independent_hmac_vectors() {
         hex(device_seed(&prf, "a").unwrap().as_slice()),
         "cda24928113648d6cd3dc9f1d83e96cae9cb91d29491e4a75d7c9b61dfefba0f"
     );
+    assert_eq!(
+        hex(roots.holder_sealing_key.as_slice()),
+        "ceb5a2ef739dcbe1c3bdb9d8ef7543ebf8f2af6d77e6d9b0a736e290bb9559e2"
+    );
+    assert_eq!(
+        hex(roots.balance_seed.as_slice()),
+        "2589cab8f9b8522a5cbed74f38dcad0775f0fe41f8cb9dbde59042a0c1d48042"
+    );
+    assert_eq!(
+        hex(roots.balance_sealing_key.as_slice()),
+        "fe524fdaab3dec920c9515b489860744aa14c0f5c57bf90a8736d1858813a901"
+    );
     let seed = lineage_seed(&prf, "a").unwrap();
     assert_eq!(
         hex(seed.as_slice()),
@@ -68,17 +80,26 @@ fn legacy_purpose_vectors_remain_stable_and_separate_domains() {
     let restored = identity_roots(&prf, "a").unwrap();
     assert_eq!(a.identity, restored.identity);
     assert_eq!(a.passport_holder_seed, restored.passport_holder_seed);
+    assert_eq!(a.holder_sealing_key, restored.holder_sealing_key);
+    assert_eq!(a.balance_sealing_key, restored.balance_sealing_key);
+    assert_eq!(a.balance_seed, restored.balance_seed);
     for different in [
         identity_roots(&prf, "b").unwrap(),
         identity_roots(&other, "a").unwrap(),
     ] {
         assert_ne!(a.identity, different.identity);
         assert_ne!(a.passport_holder_seed, different.passport_holder_seed);
+        assert_ne!(a.holder_sealing_key, different.holder_sealing_key);
+        assert_ne!(a.balance_sealing_key, different.balance_sealing_key);
+        assert_ne!(a.balance_seed, different.balance_seed);
     }
     let seed = lineage_seed(&prf, "a").unwrap();
     let branches = [
         a.identity.clone(),
         a.passport_holder_seed.clone(),
+        a.holder_sealing_key.clone(),
+        a.balance_sealing_key.clone(),
+        a.balance_seed.clone(),
         device_seed(&prf, "a").unwrap(),
         seed.clone(),
         lineage_root(&seed, 1).unwrap(),

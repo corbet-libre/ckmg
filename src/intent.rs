@@ -21,6 +21,8 @@ pub struct AdmittedCommand {
     pub target: Option<PublicKey>,
     /// Original owner pairing/transition digest where applicable.
     pub statement: Option<[u8; 32]>,
+    /// Exact original owner bytes, only for SignDeviceEd25519. Never a request-body transcript.
+    pub transcript: Option<Vec<u8>>,
     /// Exclusive trusted Unix-second deadline.
     pub expires: u64,
 }
@@ -63,6 +65,15 @@ impl IntentAdmission {
         if command.origin.is_empty()
             || command.origin.len() > 2048
             || command.origin.chars().any(char::is_control)
+        {
+            return Err(Error::Encoding);
+        }
+        if (command.action == Action::SignDeviceEd25519) != command.transcript.is_some()
+            || command.transcript.as_ref().is_some_and(|bytes| {
+                bytes.len() > crate::MAX_MESSAGE_BYTES
+                    || command.target.is_some()
+                    || command.statement.is_some()
+            })
         {
             return Err(Error::Encoding);
         }
@@ -109,6 +120,13 @@ impl IntentVerifier {
             || request.epoch != command.epoch
             || request.target != command.target
             || request.statement != command.statement
+            || match (request.signing, command.transcript.as_deref()) {
+                (None, None) => false,
+                (Some(signing), Some(bytes)) => {
+                    signing.transcript != bytes || signing.expires != command.expires
+                }
+                _ => true,
+            }
         {
             return Err(Error::Unauthorized);
         }

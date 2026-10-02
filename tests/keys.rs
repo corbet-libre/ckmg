@@ -1223,6 +1223,13 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
             .with_device_ed25519_signer(|signer| {
                 let public = *signer.public_key();
                 assert_eq!(
+                    signer.hpke_public_key().unwrap(),
+                    ed25519_dalek::VerifyingKey::from_bytes(&public)
+                        .unwrap()
+                        .to_montgomery()
+                        .to_bytes()
+                );
+                assert_eq!(
                     signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
                     Err(Error::Limit)
                 );

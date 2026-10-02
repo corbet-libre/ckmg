@@ -26,6 +26,9 @@ pub use cvln::{
     RecordInitializer as NativeRecordInitializer, core::DHTSchema as NativeRecordSchema,
 };
 pub mod passkey;
+/// Original internal Wallet engine types; upper Wallet uses this exact dependency instance.
+#[cfg(feature = "wallet-engine")]
+pub use cwlt_engine as wallet_engine;
 #[cfg(feature = "passport")]
 pub use passkey::HolderSeed;
 mod ports;
@@ -34,7 +37,11 @@ mod record_cipher;
 mod typed;
 mod vld0;
 
+/// Exact original Envelope types used by Keys, avoiding path/git type copies.
+#[cfg(feature = "profile-envelope")]
+pub use cnvl as envelope;
 pub use error::Error;
+
 pub use keys::{
     Change, DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, KeyHandle, Keys,
     OperationId, Receipt, RestoreRoot, State, Vld0Signer,
@@ -43,8 +50,8 @@ pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
 };
 pub use ports::{
-    Action, Authority, Authorization, Clock, Commit, Entropy, Locator, MAX_CHECKPOINT_BYTES,
-    MAX_DEVICES, MAX_MESSAGE_BYTES, SecureStore, SystemEntropy,
+    Action, Authority, Authorization, Clock, Commit, DeviceSigning, Entropy, Locator,
+    MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES, SecureStore, SystemEntropy,
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
 pub use record_cipher::{Vld0RecordCipher, Vld0RecordReader};
