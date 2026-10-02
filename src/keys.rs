@@ -16,7 +16,7 @@ const CHECKPOINT_HEADER: &[u8] = b"ckmg.checkpoint.v1\0";
 const PURPOSE_HEADER: &[u8] = b"ckmg.purpose.sealed.v1\0";
 
 /// Local custody state; Authorized still requires a fresh authority check per operation.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub enum State {
     /// No decrypted material held.
     Locked,
@@ -35,14 +35,14 @@ pub enum State {
 }
 
 /// Private local device metadata. Serialized only inside the encrypted checkpoint.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "DeviceInfoWire", into = "DeviceInfoWire")]
 pub struct DeviceInfo {
     name: String,
     authority_reference: Vec<u8>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct DeviceInfoWire {
     name: String,
@@ -105,6 +105,64 @@ pub struct Receipt {
     pub operation: OperationId,
     /// Exact output committed with the replacement checkpoint.
     pub change: Change,
+    /// Device signature over this exact operation and change. Historical outputs
+    /// may lack it and must not authorize a current lineage publication.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attestation: Option<DeviceAttestation>,
+}
+
+/// Untrusted public device-possession evidence. This signature is not a passkey
+/// assertion and never authorizes current lineage. G3 additionally requires the
+/// original passkey assertion and authenticated offline credential/revocation feed.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DeviceAttestation {
+    /// Device key certified by the original community credential.
+    pub device: PublicKey,
+    /// VLD0 signature over the exact receipt operation and complete change.
+    pub signature: Signature,
+}
+impl Receipt {
+    /// Exact public challenge for the original Keyhole passkey assertion verifier.
+    /// Binds the complete change and durable operation under a separate purpose;
+    /// obtaining this digest proves neither credential activity nor authorization.
+    /// The caller must retain the original public assertion and Policy-authenticated
+    /// credential descriptor, and check current offline revocations before adoption.
+    pub fn passkey_challenge(&self) -> Result<[u8; 32], Error> {
+        digest(b"ckmg.passkey-change.v1\0", &(self.operation, &self.change))
+    }
+    fn attestation_bytes(&self, device: PublicKey) -> Result<Vec<u8>, Error> {
+        encode(
+            b"ckmg.device-change.v1\0",
+            &(self.operation, &self.change, device),
+        )
+    }
+    /// Verify original device signature and self-signed lineage, returning its
+    /// claimed device author. This proves possession only, never active passkey
+    /// status or global currentness. A delegated device key cannot substitute for
+    /// the original passkey assertion required to authorize a lineage change.
+    pub fn attested_lineage(&self) -> Result<(&Lineage, PublicKey), Error> {
+        let attestation = self.attestation.as_ref().ok_or(Error::Unauthorized)?;
+        vld0::verify(
+            &attestation.device,
+            &self.attestation_bytes(attestation.device)?,
+            &attestation.signature,
+        )?;
+        let lineage = match &self.change {
+            Change::Created(lineage)
+            | Change::Restored(lineage)
+            | Change::Paired(lineage)
+            | Change::Adopted(lineage) => lineage,
+            Change::DeviceAuthorized(grant) => &grant.lineage,
+            Change::Rotated(rotation) => &rotation.lineage,
+            Change::PairingRequested(_) | Change::Revoked(_) => return Err(Error::Unauthorized),
+        };
+        lineage.verify()?;
+        if !lineage.devices.contains(&attestation.device) {
+            return Err(Error::Unauthorized);
+        }
+        Ok((lineage, attestation.device))
+    }
 }
 
 /// Public/ciphertext changes stored atomically with custody; never raw root/device keys.
@@ -134,6 +192,9 @@ pub enum RestoreRoot<'a> {
     /// Historical API spelling retained only to refuse recordless restoration.
     /// Every passkey needs a retained encrypted copy; this always returns MissingCheckpoint.
     Derived,
+    /// Exact retained PRF-encrypted Keys checkpoint, including its independently
+    /// wrapped random root. Never a plaintext root or another domain's checkpoint.
+    Checkpoint(&'a [u8]),
     /// A retained root transfer for a different credential enrolled by pairing.
     Paired(&'a PairingGrant),
     /// A retained current-epoch envelope when another credential rotated the root.
@@ -539,6 +600,33 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         .await?;
         match source {
             RestoreRoot::Derived => return Err(Error::MissingCheckpoint),
+            RestoreRoot::Checkpoint(sealed) => {
+                if sealed.len() > MAX_CHECKPOINT_BYTES {
+                    return Err(Error::Limit);
+                }
+                let key = passkey::ring_key(prf, anchor.binding.community())?;
+                let bytes = sealed
+                    .strip_prefix(CHECKPOINT_HEADER)
+                    .ok_or(Error::Encoding)?;
+                let plaintext = keyring::open(&key, &checkpoint_aad(location), bytes)?;
+                let (metadata, retained) = decode_checkpoint(&plaintext)?;
+                validate_checkpoint(&metadata, &retained)?;
+                if vld0::public_key(&retained.device) != device
+                    || metadata.revoked
+                    || metadata.pairing.is_some()
+                    || metadata.lineage.binding != anchor.binding
+                    || metadata.lineage.root != anchor.root
+                    || metadata.lineage.epoch != anchor.epoch
+                    || metadata.lineage.identity != anchor.identity
+                    || metadata.lineage.revision > anchor.revision
+                {
+                    return Err(Error::Unauthorized);
+                }
+                if metadata.last_time > now {
+                    return Err(Error::Clock);
+                }
+                material = retained;
+            }
             RestoreRoot::Paired(grant) => {
                 grant.lineage.verify()?;
                 if grant.lineage.version != anchor.version
@@ -604,6 +692,33 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let candidate = self.initial(prf, location, material, info, anchor.clone(), None)?;
         self.prepare(candidate, None, Some(Change::Restored(anchor.clone())))?;
         self.commit().await?.ok_or(Error::Crypto)
+    }
+
+    /// Retain the exact already-durable PRF-wrapped checkpoint in owner Records.
+    /// No new encryption format or plaintext root is exposed. The current root,
+    /// device authority and storage generation are checked before returning bytes.
+    pub async fn retained_checkpoint(&mut self) -> Result<Vec<u8>, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let current = self.loaded()?;
+        let location = current.location;
+        let stamp = current.stamp;
+        match self.store.load(&location).await {
+            Ok(Some(bytes))
+                if bytes.len() <= MAX_CHECKPOINT_BYTES
+                    && *blake3::hash(&bytes).as_bytes() == stamp =>
+            {
+                Ok(bytes)
+            }
+            Ok(_) => {
+                self.fail_closed(State::Reconcile);
+                Err(Error::Reconcile)
+            }
+            Err(_) => {
+                self.fail_closed(State::Locked);
+                Err(Error::Unavailable)
+            }
+        }
     }
 
     /// Persist a deterministically derived device and a short-lived proof, after the authority
@@ -772,10 +887,20 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .ok_or(Error::Limit)?;
         candidate.metadata.last_time = self.last_time;
         candidate.metadata.output = match change {
-            Some(change) => Some(Receipt {
-                operation: OperationId(*vld0::random_secret(&mut self.entropy)?),
-                change,
-            }),
+            Some(change) => {
+                let mut receipt = Receipt {
+                    operation: OperationId(*vld0::random_secret(&mut self.entropy)?),
+                    change,
+                    attestation: None,
+                };
+                let device = vld0::public_key(&candidate.material.device);
+                let signature = vld0::sign(
+                    &candidate.material.device,
+                    &receipt.attestation_bytes(device)?,
+                )?;
+                receipt.attestation = Some(DeviceAttestation { device, signature });
+                Some(receipt)
+            }
             None => None,
         };
         validate_checkpoint(&candidate.metadata, &candidate.material)?;
