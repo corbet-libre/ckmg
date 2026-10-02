@@ -62,6 +62,44 @@ crypto/state suite in headless Chrome. Dependencies are recorded in `Cargo.lock`
 No local workstation builds are required. Veilid reference tests remain isolated
 under MPL-2.0; production depends on upstream crypto crates, never `veilid-core`.
 
+## Scope
+
+### Purpose
+
+ckmg is the member's key ring inside the member vault: it holds root, device, and purpose keys, signs and seals, pairs devices, and derives vault location and storage keys from an opaque passkey PRF input without ever seeing WebAuthn.
+
+### Owns
+
+- Community-local root, device, and purpose key custody, lending purpose keys narrowly to Veilid, OpenMLS, and Arti.
+- Deterministic derivation of root secrets, vault locator, and storage wrapping capability from the PRF input.
+- Signed device lineage: pairing from a live device only with the root sealed to the new device, and removal with a new epoch and key rotation.
+- Private device names and authority references.
+- Typed VLD0 keys and signatures.
+- Separate holder custody in the wallet scope.
+
+### Never
+
+- Touches WebAuthn, including options, challenges, credential identifiers, or assertions.
+- Exports root or holder secrets, or shares keys or locators across communities.
+- Treats an unsigned public key as authorization, or uses a globally stable root as a member identifier.
+- Provides operator recovery, backup service, or plaintext export.
+- Performs network or filesystem I/O, depends on veilid-core, or builds its own cryptographic primitives.
+- Emits identifiers, plaintext, or secrets in errors, or sends personal identifiers in outbound requests.
+
+### States
+
+Locked, Authorized, PendingDevice, and MissingCheckpoint for device custody; Prepared to committed for writes; Prepared to Authorized for rotation; Revoked after removal; Reconcile after an uncertain write; and Unrecoverable when no passkey or record survives, which never creates a new identity.
+
+### Test obligations
+
+- Signatures bind purpose, community, member, device, and epoch; wrong-purpose and revoked handles fail.
+- The same person in two communities gets independent keys, and the same PRF input regenerates the same roots without a vault record.
+- Absent records are distinguished from unreachable stores; an unreachable store never authorizes creating a new identity.
+- Rotation preserves the existing membership identity and its obligations; a crash before or after the rotation commit never authorizes old and new state together.
+- Pairing, clock regression, tampering, corruption, and cancellation are covered on native and WebAssembly with identical test vectors.
+- Full line and branch coverage with real round trips and no mocks of its own logic, including injected delay, duplication, loss, cancellation, clock regression, corruption, and storage conflicts.
+- Atomic publication with durable acceptance and reconciliation of unknown outcomes without regenerating keys, proofs, or effects, keeping each community isolated and all inputs bounded.
+
 ## License
 
 Copyright 2026 Julian Y. Richard Corbet. Licensed under
