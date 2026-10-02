@@ -14,6 +14,8 @@
 //! Cryptographic custody is not proof of community membership or current eligibility.
 
 mod error;
+mod intent;
+pub use intent::{AdmittedCommand, IntentAdmission, IntentGuard, IntentVerifier, intent_channel};
 mod keyring;
 mod keys;
 mod lineage;
@@ -34,8 +36,8 @@ mod vld0;
 
 pub use error::Error;
 pub use keys::{
-    Change, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, KeyHandle, Keys, OperationId, Receipt,
-    RestoreRoot, State, Vld0Signer,
+    Change, DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, KeyHandle, Keys,
+    OperationId, Receipt, RestoreRoot, State, Vld0Signer,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,

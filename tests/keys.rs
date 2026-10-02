@@ -63,12 +63,23 @@ fn a_passkey_does_not_determine_the_common_identity_root() {
         assert_eq!(first.devices, second.devices);
         assert_ne!(first.root, second.root);
         assert_ne!(first.identity, second.identity);
-        let left_identity = left.with_identity(|identity| identity.public_key()).await.unwrap();
-        let right_identity = right.with_identity(|identity| identity.public_key()).await.unwrap();
+        let left_identity = left
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
+        let right_identity = right
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
         assert_ne!(left_identity, right_identity);
         left.lock();
         left.unlock(&prf(1), "a").await.unwrap();
-        assert_eq!(left.with_identity(|identity| identity.public_key()).await.unwrap(), left_identity);
+        assert_eq!(
+            left.with_identity(|identity| identity.public_key())
+                .await
+                .unwrap(),
+            left_identity
+        );
         assert_eq!(left.lineage().await.unwrap(), first);
     });
 }
@@ -263,24 +274,57 @@ fn historical_opening_survives_two_rotations_pairing_and_same_passkey_restart() 
         let mut b = machine(&store, &time, &guard, 112);
         let mut c = machine(&store, &time, &guard, 113);
         create(&mut a, &guard, &prf(1), &binding("a")).await;
-        let identity = a.with_identity(|identity| identity.public_key()).await.unwrap();
+        let identity = a
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
         let first = a.key(purpose(Scope::Member, "history")).await.unwrap();
-        let ciphertext = a.seal(&first, b"accepted-history", b"epoch one history").await.unwrap();
-        let record = a.with_vld0_record_cipher(&first, |cipher| cipher.crypt(&[17; 24], b"signed historical record")).await.unwrap().unwrap();
+        let ciphertext = a
+            .seal(&first, b"accepted-history", b"epoch one history")
+            .await
+            .unwrap();
+        let record = a
+            .with_vld0_record_cipher(&first, |cipher| {
+                cipher.crypt(&[17; 24], b"signed historical record")
+            })
+            .await
+            .unwrap()
+            .unwrap();
         let grant = pair(&mut a, &mut b, &guard, &prf(2)).await;
         prepare(&mut a, grant.request.device).await;
         let receipt = a.commit().await.unwrap().unwrap();
         guard.publish(&receipt);
         a.acknowledge(receipt.operation).await.unwrap();
         let second = a.key(purpose(Scope::Member, "history")).await.unwrap();
-        assert!(a.open(&second, b"accepted-history", &ciphertext).await.is_err());
-        assert!(a.open_historical(&first, 1, b"accepted-history", &ciphertext).await.is_err());
-        assert_eq!(&*a.open_historical(&second, 1, b"accepted-history", &ciphertext).await.unwrap(), b"epoch one history");
-        let ciphertext_two = a.seal(&second, b"accepted-history", b"epoch two history").await.unwrap();
+        assert!(
+            a.open(&second, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            a.open_historical(&first, 1, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            &*a.open_historical(&second, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
+        let ciphertext_two = a
+            .seal(&second, b"accepted-history", b"epoch two history")
+            .await
+            .unwrap();
         let grant = pair(&mut a, &mut c, &guard, &prf(3)).await;
         assert_eq!(grant.version, 3);
         let paired = c.key(purpose(Scope::Member, "history")).await.unwrap();
-        assert_eq!(&*c.open_historical(&paired, 1, b"accepted-history", &ciphertext).await.unwrap(), b"epoch one history");
+        assert_eq!(
+            &*c.open_historical(&paired, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
         prepare(&mut a, grant.request.device).await;
         let receipt = a.commit().await.unwrap().unwrap();
         guard.publish(&receipt);
@@ -288,16 +332,68 @@ fn historical_opening_survives_two_rotations_pairing_and_same_passkey_restart() 
         a.lock();
         let mut restored = machine(&store, &time, &guard, 114);
         restored.unlock(&prf(1), "a").await.unwrap();
-        assert_eq!(restored.with_identity(|identity| identity.public_key()).await.unwrap(), identity);
-        let current = restored.key(purpose(Scope::Member, "history")).await.unwrap();
-        assert_eq!(&*restored.open_historical(&current, 1, b"accepted-history", &ciphertext).await.unwrap(), b"epoch one history");
-        assert_eq!(&*restored.open_historical(&current, 2, b"accepted-history", &ciphertext_two).await.unwrap(), b"epoch two history");
-        assert_eq!(&*restored.with_historical_vld0_reader(&current, 1, |reader| reader.open(&[17; 24], &record)).await.unwrap().unwrap(), b"signed historical record");
-        assert!(restored.open_historical(&current, 0, b"accepted-history", &ciphertext).await.is_err());
-        assert!(restored.open_historical(&current, 4, b"accepted-history", &ciphertext).await.is_err());
-        assert!(restored.open_historical(&current, 2, b"accepted-history", &ciphertext).await.is_err());
-        assert!(restored.open_historical(&current, 1, b"other-history", &ciphertext).await.is_err());
-        assert!(c.open_historical(&paired, 1, b"accepted-history", &ciphertext).await.is_err());
+        assert_eq!(
+            restored
+                .with_identity(|identity| identity.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
+        let current = restored
+            .key(purpose(Scope::Member, "history"))
+            .await
+            .unwrap();
+        assert_eq!(
+            &*restored
+                .open_historical(&current, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
+        assert_eq!(
+            &*restored
+                .open_historical(&current, 2, b"accepted-history", &ciphertext_two)
+                .await
+                .unwrap(),
+            b"epoch two history"
+        );
+        assert_eq!(
+            &*restored
+                .with_historical_vld0_reader(&current, 1, |reader| reader.open(&[17; 24], &record))
+                .await
+                .unwrap()
+                .unwrap(),
+            b"signed historical record"
+        );
+        assert!(
+            restored
+                .open_historical(&current, 0, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 4, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 2, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 1, b"other-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            c.open_historical(&paired, 1, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
     });
 }
 
@@ -707,9 +803,16 @@ fn retained_encrypted_vault_restores_the_exact_identity_device_and_member_keys()
             Error::Unauthorized
         );
         assert_eq!(
-            phone.restore_scope(
-                &prf(1), &lineage, RestoreRoot::Derived, info(), &restore_consent(&lineage),
-            ).await.unwrap_err(),
+            phone
+                .restore_scope(
+                    &prf(1),
+                    &lineage,
+                    RestoreRoot::Derived,
+                    info(),
+                    &restore_consent(&lineage),
+                )
+                .await
+                .unwrap_err(),
             Error::MissingCheckpoint,
         );
         // The member's retained encrypted records, never an operator root copy.
@@ -838,7 +941,10 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
         create(&mut a, &guard, &prf(1), &binding("a")).await;
         let grant = pair(&mut a, &mut b, &guard, &prf(2)).await;
         let identity = a.with_identity(|roots| roots.public_key()).await.unwrap();
-        assert_eq!(b.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        assert_eq!(
+            b.with_identity(|roots| roots.public_key()).await.unwrap(),
+            identity
+        );
         let anchor = a.lineage().await.unwrap();
         time.0.set(1400); // The original pairing challenge has expired.
         let empty = Memory::default();
@@ -882,10 +988,22 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         phone.acknowledge(receipt.operation).await.unwrap();
         assert_eq!(phone.lineage().await.unwrap(), anchor);
-        assert_eq!(phone.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        assert_eq!(
+            phone
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
         phone.lock();
         phone.unlock(&prf(2), "a").await.unwrap();
-        assert_eq!(phone.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        assert_eq!(
+            phone
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
         let third = pair(&mut a, &mut c, &guard, &prf(3)).await;
         prepare(&mut a, third.request.device).await;
         let receipt = a.commit().await.unwrap().unwrap();
@@ -922,8 +1040,20 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         survivor.acknowledge(restored.operation).await.unwrap();
         assert_eq!(survivor.lineage().await.unwrap(), *anchor);
-        assert_eq!(owner.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
-        assert_eq!(survivor.with_identity(|roots| roots.public_key()).await.unwrap(), identity);
+        assert_eq!(
+            owner
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
+        assert_eq!(
+            survivor
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
         let mut removed = machine(&Memory::default(), &time, &guard, 41);
         assert_eq!(
             removed
@@ -1092,7 +1222,10 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         let (device, proof) = keys
             .with_device_ed25519_signer(|signer| {
                 let public = *signer.public_key();
-                assert_eq!(signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]), Err(Error::Limit));
+                assert_eq!(
+                    signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
                 (public, signer.sign(b"original profile transcript").unwrap())
             })
             .await
@@ -1129,23 +1262,44 @@ fn record_cipher_restores_exact_bytes_without_exporting_read_keys() {
         create(&mut keys, &guard, &prf(1), &binding("a")).await;
         let handle = keys.key(purpose(Scope::Member, "records")).await.unwrap();
         let nonce = [21; 24];
-        let ciphertext = keys.with_vld0_record_cipher(&handle, |cipher| {
-            assert_eq!(cipher.crypt(&nonce, &vec![0; MAX_MESSAGE_BYTES + 1]), Err(Error::Limit));
-            assert!(cipher.crypt(&nonce, &[]).unwrap().is_empty());
-            cipher.crypt(&nonce, b"padded original record").unwrap()
-        }).await.unwrap();
+        let ciphertext = keys
+            .with_vld0_record_cipher(&handle, |cipher| {
+                assert_eq!(
+                    cipher.crypt(&nonce, &vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
+                assert!(cipher.crypt(&nonce, &[]).unwrap().is_empty());
+                cipher.crypt(&nonce, b"padded original record").unwrap()
+            })
+            .await
+            .unwrap();
         assert_ne!(&*ciphertext, b"padded original record");
-        let wrong = keys.key(purpose(Scope::Member, "other-record")).await.unwrap();
-        let other = keys.with_vld0_record_cipher(&wrong, |cipher| cipher.crypt(&nonce, &ciphertext)).await.unwrap().unwrap();
+        let wrong = keys
+            .key(purpose(Scope::Member, "other-record"))
+            .await
+            .unwrap();
+        let other = keys
+            .with_vld0_record_cipher(&wrong, |cipher| cipher.crypt(&nonce, &ciphertext))
+            .await
+            .unwrap()
+            .unwrap();
         assert_ne!(&*other, b"padded original record");
         keys.lock();
         keys.unlock(&prf(1), "a").await.unwrap();
         let restored = keys.key(purpose(Scope::Member, "records")).await.unwrap();
-        let opened = keys.with_vld0_record_cipher(&restored, |cipher| cipher.crypt(&nonce, &ciphertext)).await.unwrap().unwrap();
+        let opened = keys
+            .with_vld0_record_cipher(&restored, |cipher| cipher.crypt(&nonce, &ciphertext))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(&*opened, b"padded original record");
         guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
         let called = std::cell::Cell::new(false);
-        assert!(keys.with_vld0_record_cipher(&restored, |_| called.set(true)).await.is_err());
+        assert!(
+            keys.with_vld0_record_cipher(&restored, |_| called.set(true))
+                .await
+                .is_err()
+        );
         assert!(!called.get());
     });
 }
@@ -1155,4 +1309,87 @@ fn record_cipher_restores_exact_bytes_without_exporting_read_keys() {
 #[wasm_bindgen_test::wasm_bindgen_test]
 fn profiling_runtime_is_linked() {
     let _ = browser_coverage_runtime::__owned_test_module_signature();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn initial_passkey_restores_only_from_its_retained_wrapped_random_root() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut owner = machine(&store, &time, &guard, 141);
+        create(&mut owner, &guard, &prf(1), &binding("garden")).await;
+        let anchor = owner.lineage().await.unwrap();
+        let purpose = purpose(Scope::Member, "history");
+        let original = owner.key(purpose.clone()).await.unwrap();
+        let ciphertext = owner
+            .seal(&original, b"retained history", b"surviving content")
+            .await
+            .unwrap();
+        let public = original.certificate().key;
+        let retained = owner.retained_checkpoint().await.unwrap();
+        owner.lock();
+        store.0.borrow_mut().records.clear(); // No old device or local data remains.
+        let empty = Memory::default();
+        for bad in [vec![], vec![0; MAX_CHECKPOINT_BYTES + 1], {
+            let mut changed = retained.clone();
+            let last = changed.len() - 1;
+            changed[last] ^= 1;
+            changed
+        }] {
+            let mut phone = machine(&empty, &time, &guard, 142);
+            assert!(
+                phone
+                    .restore_scope(
+                        &prf(1),
+                        &anchor,
+                        RestoreRoot::Checkpoint(&bad),
+                        info(),
+                        &restore_consent(&anchor)
+                    )
+                    .await
+                    .is_err()
+            );
+            assert_eq!(empty.0.borrow().writes, 0);
+        }
+        let mut phone = machine(&empty, &time, &guard, 143);
+        assert!(
+            phone
+                .restore_scope(
+                    &prf(2),
+                    &anchor,
+                    RestoreRoot::Checkpoint(&retained),
+                    info(),
+                    &restore_consent(&anchor)
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(empty.0.borrow().writes, 0);
+        let receipt = phone
+            .restore_scope(
+                &prf(1),
+                &anchor,
+                RestoreRoot::Checkpoint(&retained),
+                info(),
+                &restore_consent(&anchor),
+            )
+            .await
+            .unwrap();
+        guard.publish(&receipt);
+        phone.acknowledge(receipt.operation).await.unwrap();
+        let restored = phone.key(purpose).await.unwrap();
+        assert_eq!(restored.certificate().key, public);
+        assert_eq!(
+            &*phone
+                .open(&restored, b"retained history", &ciphertext)
+                .await
+                .unwrap(),
+            b"surviving content"
+        );
+        assert!(receipt.attested_lineage().is_ok());
+        phone.lock();
+        assert!(phone.retained_checkpoint().await.is_err());
+    });
 }

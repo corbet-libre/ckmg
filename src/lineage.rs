@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 mod tests;
 
 /// Community identifier and the externally verified cpsd pseudonym. Never root-derived.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "BindingWire", into = "BindingWire")]
 pub struct Binding {
     community: String,
     member: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct BindingWire {
     community: String,
@@ -64,7 +64,7 @@ impl Binding {
 }
 
 /// Root-signed current device set. The root is community-local and is never a member ID.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Lineage {
     /// Format version; 2 binds a retained common identity, 1 is historical.

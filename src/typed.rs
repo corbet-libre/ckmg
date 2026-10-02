@@ -121,6 +121,19 @@ macro_rules! typed_bytes {
             }
         }
 
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+            fn schema_id() -> std::borrow::Cow<'static, str> {
+                concat!(module_path!(), "::", stringify!($name)).into()
+            }
+            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                // Serde emits the typed base64url string, never the internal array.
+                <String as schemars::JsonSchema>::json_schema(generator)
+            }
+        }
+
         impl<'de> Deserialize<'de> for $name {
             fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
                 let text = String::deserialize(deserializer)?;
