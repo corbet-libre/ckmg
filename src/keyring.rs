@@ -12,6 +12,9 @@ use zeroize::Zeroizing;
 pub(crate) struct Material {
     pub(crate) device: Secret,
     pub(crate) root: Option<Secret>,
+    pub(crate) identity: Option<Secret>,
+    // Opening-only history. Never used to issue a certificate or sign new data.
+    pub(crate) history: Vec<(u64, Secret)>,
 }
 
 impl Material {
@@ -19,17 +22,18 @@ impl Material {
         prf: &passkey::PrfOutput,
         community: &str,
         root: bool,
+        rng: &mut impl Entropy,
     ) -> Result<Self, Error> {
+        let common = if root {
+            Some(crate::vld0::random_secret(rng)?)
+        } else {
+            None
+        };
         Ok(Self {
             device: passkey::device_seed(prf, community)?,
-            root: if root {
-                Some(passkey::lineage_root(
-                    &passkey::lineage_seed(prf, community)?,
-                    1,
-                )?)
-            } else {
-                None
-            },
+            identity: common.clone(),
+            root: common,
+            history: Vec::new(),
         })
     }
 
@@ -37,25 +41,114 @@ impl Material {
         self.root.as_ref().ok_or(Error::NoRoot)
     }
 
+    pub(crate) fn transfer_version(&self) -> u8 {
+        if !self.history.is_empty() {
+            3
+        } else if self.identity.is_some() {
+            2
+        } else {
+            1
+        }
+    }
+
+    pub(crate) fn transfer(&self) -> Result<Zeroizing<Vec<u8>>, Error> {
+        if self.history.len() > (crate::MAX_CHECKPOINT_BYTES - 65) / 40 {
+            return Err(Error::Limit);
+        }
+        let mut bytes = Zeroizing::new(self.root()?.to_vec());
+        if !self.history.is_empty() {
+            bytes.push(u8::from(self.identity.is_some()));
+        }
+        if let Some(identity) = &self.identity {
+            bytes.extend_from_slice(identity.as_slice());
+        }
+        for (epoch, root) in &self.history {
+            bytes.extend_from_slice(&epoch.to_le_bytes());
+            bytes.extend_from_slice(root.as_slice());
+        }
+        Ok(bytes)
+    }
+
+    pub(crate) fn receive(&mut self, version: u8, bytes: &[u8]) -> Result<(), Error> {
+        let (identity, history) = match (version, bytes.len()) {
+            (1, 32) => (None, Vec::new()),
+            (2, 64) => (Some(secret(&bytes[32..])?), Vec::new()),
+            (3, length) if (73..=crate::MAX_CHECKPOINT_BYTES).contains(&length) => {
+                let (identity, start) = match bytes[32] {
+                    0 => (None, 33),
+                    1 => (Some(secret(&bytes[33..65])?), 65),
+                    _ => return Err(Error::Encoding),
+                };
+                let tail = &bytes[start..];
+                if tail.is_empty() || tail.len() % 40 != 0 {
+                    return Err(Error::Encoding);
+                }
+                let mut history = Vec::with_capacity(tail.len() / 40);
+                let mut previous = 0;
+                for entry in tail.chunks_exact(40) {
+                    let epoch =
+                        u64::from_le_bytes(entry[..8].try_into().map_err(|_| Error::Encoding)?);
+                    if epoch <= previous {
+                        return Err(Error::Encoding);
+                    }
+                    history.push((epoch, secret(&entry[8..])?));
+                    previous = epoch;
+                }
+                (identity, history)
+            }
+            _ => return Err(Error::Encoding),
+        };
+        self.root = Some(secret(&bytes[..32])?);
+        self.identity = identity;
+        self.history = history;
+        Ok(())
+    }
+
     pub(crate) fn append(&self, out: &mut Zeroizing<Vec<u8>>) {
-        out.push(u8::from(self.root.is_some()));
+        let flag = if self.root.is_some() {
+            self.transfer_version()
+        } else {
+            0
+        };
+        out.push(flag);
         out.extend_from_slice(self.device.as_slice());
         if let Some(root) = &self.root {
-            out.extend_from_slice(root.as_slice());
+            if flag == 3 {
+                out.extend_from_slice(root.as_slice());
+                out.push(u8::from(self.identity.is_some()));
+                if let Some(identity) = &self.identity {
+                    out.extend_from_slice(identity.as_slice());
+                }
+                for (epoch, root) in &self.history {
+                    out.extend_from_slice(&epoch.to_le_bytes());
+                    out.extend_from_slice(root.as_slice());
+                }
+            } else {
+                out.extend_from_slice(root.as_slice());
+                if let Some(identity) = &self.identity {
+                    out.extend_from_slice(identity.as_slice());
+                }
+            }
         }
     }
 
     pub(crate) fn parse(bytes: &[u8]) -> Result<Self, Error> {
         let (flag, bytes) = bytes.split_first().ok_or(Error::Encoding)?;
-        let root = match (*flag, bytes.len()) {
-            (0, 32) => None,
-            (1, 64) => Some(secret(&bytes[32..])?),
-            _ => return Err(Error::Encoding),
-        };
-        Ok(Self {
+        if !matches!((*flag, bytes.len()), (0, 32) | (1, 64) | (2, 96))
+            && !(*flag == 3 && (105..=crate::MAX_CHECKPOINT_BYTES).contains(&bytes.len()))
+        {
+            return Err(Error::Encoding);
+        }
+        let mut material = Self {
             device: secret(&bytes[..32])?,
-            root,
-        })
+            root: None,
+            identity: None,
+            history: Vec::new(),
+        };
+        if *flag != 0 {
+            material.receive(*flag, &bytes[32..])?;
+        }
+        Ok(material)
     }
 }
 
@@ -109,3 +202,7 @@ pub(crate) fn open(key: &Secret, aad: &[u8], sealed: &[u8]) -> Result<Zeroizing<
         .map(Zeroizing::new)
         .map_err(|_| Error::Open)
 }
+
+#[cfg(test)]
+#[path = "../tests/unit/keyring.rs"]
+mod tests;

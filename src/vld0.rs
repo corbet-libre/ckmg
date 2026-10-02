@@ -16,7 +16,26 @@ use zeroize::{Zeroize, Zeroizing};
 const VLD0_DOMAIN_SIGN: &[u8] = b"VLD0_SIGN";
 const HPKE_INFO: &[u8] = b"veilid-hpke/1VLD0";
 const HPKE_HEADER: &[u8] = b"\x01VLD0";
-pub(crate) const SEALED_ROOT_BYTES: usize = 5 + 32 + 32 + 16;
+pub(crate) fn sealed_root_bytes(version: u8) -> Result<usize, Error> {
+    match version {
+        1 => Ok(5 + 32 + 32 + 16),
+        2 => Ok(5 + 32 + 64 + 16),
+        _ => Err(Error::Encoding),
+    }
+}
+pub(crate) fn validate_sealed_root(version: u8, length: usize) -> Result<(), Error> {
+    if version == 3 {
+        let plain = length.checked_sub(5 + 32 + 16).ok_or(Error::Encoding)?;
+        if plain <= crate::MAX_CHECKPOINT_BYTES
+            && ((plain >= 73 && (plain - 33) % 40 == 0) || (plain >= 105 && (plain - 65) % 40 == 0))
+        {
+            return Ok(());
+        }
+    } else if sealed_root_bytes(version)? == length {
+        return Ok(());
+    }
+    Err(Error::Encoding)
+}
 const HPKE_ENC_LENGTH: usize = 32;
 
 type Kem = hpke::kem::X25519HkdfSha256;

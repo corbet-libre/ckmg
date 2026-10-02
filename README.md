@@ -1,7 +1,7 @@
 # ckmg — Keys
 
 Keys is the cryptographic custody library of the member vault (`cvlt`). It derives
-stable secrets from an opaque passkey PRF input, holds root/device/purpose keys,
+wrapping and device secrets from opaque passkey PRF input, holds random common roots,
 signs and seals, pairs devices, and commits root rotations atomically. Native and
 wasm32 use the same Rust implementation and crypto tests.
 
@@ -10,33 +10,43 @@ talks to WebAuthn. Server-side **ckyh Keyhole** stores the public credential and
 verifies authentication. Keys never constructs WebAuthn options or handles RP IDs,
 challenges, assertions or credential responses. See the [adapter move](docs/PASSKEYS.md).
 
+## Scope
+
+Keys owns private root, device and purpose custody, signed device lineage and
+narrow signing/sealing capabilities. It lives under Vault and receives storage,
+clock, entropy and current authority from that composition. It never performs
+WebAuthn, membership decisions, network discovery or operator recovery. Wallet owns
+passport state and presentations; Keys supplies its private purpose-separated seed.
+
+Every enrolled passkey has equal recovery implications. A common identity root is
+random. Each passkey protects its own encrypted copy in member-owned records;
+no first passkey can reconstruct identity after all retained copies disappear.
+
 ## Custody and restoration
 
 `passkey::PrfOutput::from_bytes` accepts exactly 32 bytes from a trusted local
 adapter. It has no byte getter, Debug implementation or serialization. Independent
-HKDF domains derive the vault locator, custody key, opaque `StoreCipher`, identity
-root, passport holder secret seed, device seed and member-lineage seed. Root epochs
-are derived from the credential-local lineage seed. Nonces, pairing challenges,
-session IDs and operation IDs still require secure randomness.
+HKDF domains derive the vault locator, custody key, opaque `StoreCipher` and logical
+device seed. Common identity roots and replacement epoch roots use fresh CSPRNG
+entropy. Holder and identity-purpose seeds derive from the retained common root.
 
-`Keys<S, C, R, A>` receives storage, clock, entropy and current-authority ports.
-`create_scope` requires explicit registration authority. `unlock` opens an existing
-checkpoint. If storage authoritatively reports absence, `restore_scope` can rebuild
-the same keys against authenticated current lineage, without changing the member
-binding. An unreachable store is an error, never permission to create an identity.
+`create_scope` requires explicit new-member authority and commits a random root.
+`unlock` opens a retained encrypted checkpoint. `restore_scope` requires current
+membership authority and an authenticated retained transfer. Historical `Derived`
+requests refuse recordless recovery. An unreachable store is an error, never
+permission to create an identity or declare permanent loss.
 
-The same synced passkey represents the same logical device. Rebuilding its initial
-custody needs no old vault ciphertext. A separate passkey paired into a shared root,
-or a survivor of another credential's rotation, needs its retained authenticated
-root envelope. The vault integration must retain those transfers with authority
-metadata independently of disposable content. See [restoration boundaries](docs/CONTRACT.md#restoration-boundaries).
+Paired passkeys retain the same common root under separate PRF-based custody keys.
+Rotation excludes the removed device from new epoch envelopes while preserving the
+common identity and accounting binding. Wrapped copies belong in the member's DHT
+records and are refreshed during use. There is no operator copy. Loss of all local
+and DHT copies loses identity and data equally for every passkey.
 
-`passkey::identity_roots` independently restores stable wallet identity custody and
-the passport holder seed without records. The seed remains internal: connecting it
-to the existing passport engine without an export API is a downstream integration
-gate, not an implemented credential issuance or membership-renewal flow. Lost
-contacts/history cannot be recreated from keys; available encrypted data remains
-readable with the same keys.
+Optional `passport` support lends an opaque `HolderSeed` after fresh authorization.
+Wallet consumes it to initialize the maintained Pseudonyms holder, then owns every
+passport operation and checkpoint. Keys has no Wallet dependency, installed holder,
+raw seed getter or raw callback. Durable passport and real network restore remain
+acceptance obligations; this leaf alone proves no DHT retention.
 
 ## Cryptographic operations
 

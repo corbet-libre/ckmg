@@ -22,10 +22,16 @@ include = [
 [lib]
 crate-type = ["rlib"]
 
+[features]
+default = []
+passport = ["dep:cpsd"]
+
 [dependencies]
+cpsd = { git = "https://github.com/corbet-foss/cpsd", branch = "main", default-features = false, optional = true }
 # The crypto crates Veilid's VLD0 cryptosystem uses, at the versions Veilid uses.
 ed25519-dalek = { version = "3.0.0", features = ["digest", "zeroize"] }
 chacha20poly1305 = { version = "0.11.0", default-features = false, features = ["alloc", "zeroize"] }
+chacha20 = { version = "0.10", features = ["xchacha", "zeroize"] }
 hpke = { version = "0.14.0", default-features = false, features = ["alloc", "x25519", "chacha", "getrandom"] }
 rand_chacha = "0.10"
 rand_core = "0.10"
@@ -42,10 +48,16 @@ serde_json = "1.0"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [dev-dependencies]
+cpsd = { git = "https://github.com/corbet-foss/cpsd", branch = "main", default-features = false }
+csgn = { git = "https://github.com/corbet-foss/csgn", branch = "main", default-features = false, features = ["volatile-signer"] }
 wasm-bindgen = "0.2"
-wasm-bindgen-test = "0.3"
+wasm-bindgen-test = "0.3.79"
 futures = "0.3"
 
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+browser-coverage-runtime = { path = ".github/coverage-runtime" }
+
 [lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(owned_browser_coverage)"] }
 unsafe_code = "forbid"
 missing_docs = "warn"

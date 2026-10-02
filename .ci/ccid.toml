@@ -1,0 +1,6 @@
+schema = 1
+project = "ckmg"
+
+[checks.native]
+kind = "commands"
+commands = [["bash", "ci/native-check.sh"]]
