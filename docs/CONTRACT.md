@@ -186,3 +186,5 @@ remain invalid. Original domain/epoch/purpose/context and record nonce are prese
 These APIs open archived application data. They do not clone MLS ratchets or claim
 that a different device can resume a Threads session. Full owner-record network
 restore and current server G3 authority still need integration qualification.
+
+The native-records feature transfers only purpose-derived owner/read material into cvln RecordInitializer; there is no raw key getter or network I/O in Keys. Passkey bootstrap derives distinct owner and read keys from the PRF and community under independent HKDF labels, with fixed owner-only DFLT(1). Its schema-derived Veilid locator is never the local checkpoint Locator. A current-authorized purpose handle initializes a vault record with the same VLD0 owner and read cipher as the existing scoped Tor operations. The composing runtime closes opened native records on lock/revocation; retained engines do not prove later G3. This initializes record custody only; it does not implement root-record payload retention or claim remote restore.

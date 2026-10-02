@@ -1503,6 +1503,27 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             cipher: crate::Vld0RecordCipher { secret: &secret },
         }))
     }
+
+    /// Transfer only this freshly authorized purpose's signing/read custody into
+    /// the maintained native record engine. The opaque initializer has no key
+    /// getter, Clone, Debug or serialization. Mesh consumes it in its sole core.
+    /// Lock/revocation requires the composer to close any previously opened record.
+    #[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+    pub async fn native_record_initializer(
+        &mut self,
+        handle: &KeyHandle,
+        schema: crate::NativeRecordSchema,
+    ) -> Result<crate::NativeRecordInitializer, Error> {
+        self.check_handle(handle).await?;
+        let current = self.loaded()?;
+        let owner = purpose_secret(current, &handle.certificate.purpose, false)?;
+        let cipher = purpose_secret(current, &handle.certificate.purpose, true)?;
+        let read = Zeroizing::new(blake3::derive_key(
+            "ckmg 2026-10 VLD0 record encryption v1",
+            &*cipher,
+        ));
+        Ok(crate::native_record::owner(schema, &owner, &read))
+    }
 }
 
 impl Open {

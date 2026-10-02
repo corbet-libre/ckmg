@@ -178,6 +178,20 @@ pub fn vault_location(prf: &PrfOutput, community: &str) -> Result<Locator, Error
     Ok(Locator(*expand(prf, LOCATION_INFO, community)?))
 }
 
+/// Derive one passkey's private root-record initializer before unlocking custody.
+/// Core derives its canonical DFLT(1) key; the local checkpoint locator is unrelated.
+/// This grants no membership or G3 authority, and absence never creates an identity.
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+pub fn native_passkey_record(
+    prf: &PrfOutput,
+    community: &str,
+) -> Result<crate::NativeRecordInitializer, Error> {
+    let owner = expand(prf, b"passkey-record-owner-v1\0", community)?;
+    let read = expand(prf, b"passkey-record-read-v1\0", community)?;
+    let schema = crate::NativeRecordSchema::dflt(1).map_err(|_| Error::Encoding)?;
+    Ok(crate::native_record::owner(schema, &owner, &read))
+}
+
 fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
     if store.is_empty() || store.len() > 256 || store.chars().any(char::is_control) {
         return Err(Error::Encoding);

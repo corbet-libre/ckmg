@@ -17,6 +17,12 @@ mod error;
 mod keyring;
 mod keys;
 mod lineage;
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+mod native_record;
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+pub use cvln::{
+    RecordInitializer as NativeRecordInitializer, core::DHTSchema as NativeRecordSchema,
+};
 pub mod passkey;
 #[cfg(feature = "passport")]
 pub use passkey::HolderSeed;
