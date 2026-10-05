@@ -329,6 +329,8 @@ pub struct Keys<S, C, R, A> {
     open: Option<Open>,
     prepared: Option<Prepared>,
     last_time: u64,
+    #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+    tor_custody: crate::native_tor::Custody,
 }
 
 impl<S, C, R, A> std::fmt::Debug for Keys<S, C, R, A> {
@@ -352,6 +354,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             open: None,
             prepared: None,
             last_time: 0,
+            #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+            tor_custody: crate::native_tor::Custody::default(),
         }
     }
 
@@ -363,6 +367,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Wipe decrypted material and uncommitted candidates. A committed pending output
     /// remains in storage for reconciliation. All existing handles become unusable.
     pub fn lock(&mut self) {
+        #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+        self.tor_custody.close();
         self.open = None;
         self.prepared = None;
         self.state = State::Locked;
@@ -1812,6 +1818,35 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             &*cipher,
         ));
         Ok(crate::native_record::owner(schema, &owner, &read))
+    }
+
+    /// Transfer only the authorized device onion purpose into the maintained
+    /// native Tor engine. No root, device seed or general-purpose key getter is
+    /// exposed. The scope is selected by the trusted Vault composer, never JSON.
+    ///
+    /// The handle must have device scope and the exact `tor.onion` purpose.
+    /// Generation is the owner's explicit purpose version. Like native record
+    /// initialization, this transfers narrow custody. Keys invalidation/drop
+    /// clears unused capabilities and stops their Nodes. The composer must also
+    /// stop/drop its Mesh and engine on shutdown and any remote authority loss;
+    /// an active Tor transport never substitutes for a new live G3 check.
+    #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+    pub async fn native_tor_initializer(
+        &mut self,
+        handle: &KeyHandle,
+        scope: ctrn::Scope,
+    ) -> Result<crate::NativeTorInitializer, Error> {
+        let purpose = &handle.certificate.purpose;
+        if purpose.scope() != crate::Scope::Device || purpose.label() != "tor.onion" {
+            return Err(Error::InvalidPurpose);
+        }
+        self.check_handle(handle).await?;
+        self.refresh().await?;
+        self.now()?;
+        let current = self.loaded()?;
+        let secret = purpose_secret(current, purpose, false)?;
+        let community = current.metadata.lineage.binding.community().to_owned();
+        self.tor_custody.initializer(scope, secret, community)
     }
 }
 

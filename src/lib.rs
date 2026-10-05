@@ -21,6 +21,10 @@ mod keys;
 mod lineage;
 #[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
 mod native_record;
+#[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+mod native_tor;
+#[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+pub use native_tor::NativeTorInitializer;
 #[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
 pub use cvln::{
     RecordInitializer as NativeRecordInitializer, core::DHTSchema as NativeRecordSchema,

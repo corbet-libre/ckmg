@@ -28,6 +28,7 @@ passport = ["dep:cpsd"]
 wallet-engine = ["dep:cwlt-engine"]
 profile-envelope = ["dep:cnvl"]
 native-records = ["dep:cvln"]
+native-tor = ["dep:ctrn", "dep:arti-client", "dep:tor-hscrypto", "dep:tor-llcrypto", "dep:tor-rtcompat"]
 
 [dependencies]
 cnvl = { git = "https://github.com/corbet-foss/cnvl", branch = "main", optional = true }
@@ -55,6 +56,11 @@ getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 cvln = { git = "https://github.com/corbet-foss/cvln", branch = "main", optional = true }
+ctrn = { git = "https://github.com/corbet-foss/ctrn", branch = "main", optional = true }
+arti-client = { version = "0.46", default-features = false, optional = true }
+tor-hscrypto = { version = "0.46", default-features = false, optional = true }
+tor-llcrypto = { version = "0.46", default-features = false, optional = true }
+tor-rtcompat = { version = "0.46", default-features = false, optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
