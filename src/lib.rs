@@ -43,8 +43,9 @@ pub use cnvl as envelope;
 pub use error::Error;
 
 pub use keys::{
-    Change, DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, KeyHandle, Keys,
-    OperationId, Receipt, RestoreRoot, State, Vld0Signer,
+    Change, CheckpointInspection, CheckpointInspector, DeviceAttestation, DeviceEd25519Signer,
+    DeviceInfo, Ed25519Signer, KeyHandle, Keys, OperationId, Receipt, RestoreRoot, State,
+    Vld0Signer, inspect_checkpoint,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,

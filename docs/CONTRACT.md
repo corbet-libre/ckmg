@@ -17,6 +17,7 @@ holder custody is installed only in its separately selected wallet scope.
 | `new`, `state`, `lock` | Inject SecureStore, Clock, Entropy and Authority; start locked; wipe decrypted keys on lock. |
 | `create_scope` | Explicit new-member authorization, PRF, binding and private device metadata; atomically persist a random common root and PRF-derived device and a Created receipt. Never overwrite an existing record. |
 | `unlock` | PRF + community derive the locator and custody key; decrypt exactly the stored logical device, including pending outputs. Absence yields MissingCheckpoint; no implicit creation. |
+| `inspect_checkpoint` | Authenticate the original retained checkpoint with its PRF/scope and expose only verified public lineage, device, local revision, persisted clock floor and exact ciphertext digest. Pending, pairing and revoked states refuse. This cannot unlock, grant authority or establish currentness. |
 | `restore_scope` | Authoritatively absent record, same PRF, exact current lineage, Restore authorization and a retained authenticated root transfer; reconstruct the same logical device and commit a Restored receipt. |
 | `request_pairing` | Confirmed lineage, fresh PRF and private metadata; persist a PRF-derived pending device and proof of possession before publishing the challenge. |
 | `authorize_device`, `accept_pairing` | Check recipient proof, injected approval, community/pseudonym/root/epoch/challenge/deadline and exact recipient; commit signed lineage and sealed root before returning a grant. Accept once only. |
@@ -42,6 +43,23 @@ or touches RP IDs, credentials or assertions. See [the adapter move](PASSKEYS.md
 `PrfOutput::from_bytes` is trusted opaque input, not proof of a ceremony. The
 caller must wipe its own source buffer and keep the PRF out of server payloads.
 `cwst` receives only an opaque `StoreCipher` capability. No password/key getter exists.
+
+`CheckpointInspection` preserves original checkpoint metadata without exporting
+decrypted material or private device metadata. Its local revision is not a Records
+sequence. Inspection deliberately accepts a valid older ciphertext: callers must
+bind the exact bytes to a fresh authenticated original Records observation, check
+record sequence and lineage rollback rules, and join current live membership and
+passkey/device authority with a clock at or above the persisted floor. A valid AEAD
+and root self-signature alone never satisfy those checks. Every actual Keys use
+still passes through the original Authority and intent checks.
+
+`CheckpointInspector` is an opaque, non-cloneable owner capability containing only
+the original zeroizing wrapping key and its locator/scope. An Authority can retain
+it to inspect subsequent forced Records observations after the PRF is consumed.
+It never retains decrypted checkpoint material, exports a wrapping key or grants
+a signing capability. The trusted composer must drop the inspector with custody
+on lock, expiry, revocation and cancellation. Locking a separate Keys instance
+does not revoke independently held inspectors; no shared global cache is created.
 
 Wallet custody uses the retained random common identity root, isolated from each
 community's scope. Keys lends `HolderSeed` after current authority checks. Its only
