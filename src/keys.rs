@@ -12,6 +12,9 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+mod inspection;
+pub use inspection::{CheckpointInspection, CheckpointInspector, inspect_checkpoint};
+
 const CHECKPOINT_HEADER: &[u8] = b"ckmg.checkpoint.v1\0";
 const PURPOSE_HEADER: &[u8] = b"ckmg.purpose.sealed.v1\0";
 
