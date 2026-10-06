@@ -3,15 +3,19 @@
 use crate::{Error, MAX_DEVICES, MAX_MESSAGE_BYTES, PublicKey, Purpose, Signature, vld0};
 use serde::{Deserialize, Serialize};
 
+#[cfg(test)]
+#[path = "../tests/unit/lineage.rs"]
+mod tests;
+
 /// Community identifier and the externally verified cpsd pseudonym. Never root-derived.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(try_from = "BindingWire", into = "BindingWire")]
 pub struct Binding {
     community: String,
     member: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct BindingWire {
     community: String,
@@ -60,10 +64,10 @@ impl Binding {
 }
 
 /// Root-signed current device set. The root is community-local and is never a member ID.
-#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Lineage {
-    /// Format version, currently 1.
+    /// Format version; 2 binds a retained common identity, 1 is historical.
     pub version: u8,
     /// Scope of every key in this lineage.
     pub binding: Binding,
@@ -73,6 +77,9 @@ pub struct Lineage {
     pub revision: u64,
     /// Current root public key.
     pub root: PublicKey,
+    /// Original scope-local identity; version 2 preserves it across epoch rotations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<PublicKey>,
     /// Unique authorized device keys, sorted by typed bytes.
     pub devices: Vec<PublicKey>,
     /// Root signature over [`Self::signed_bytes`].
@@ -83,6 +90,20 @@ impl Lineage {
     /// Canonical transcript, independent of a transport's JSON formatting.
     pub fn signed_bytes(&self) -> Result<Vec<u8>, Error> {
         self.shape()?;
+        if self.version == 2 {
+            return encode(
+                b"ckmg.lineage.v2\0",
+                &(
+                    self.version,
+                    &self.binding,
+                    self.epoch,
+                    self.revision,
+                    self.root,
+                    &self.devices,
+                    self.identity,
+                ),
+            );
+        }
         encode(
             b"ckmg.lineage.v1\0",
             &(
@@ -97,7 +118,7 @@ impl Lineage {
     }
 
     fn shape(&self) -> Result<(), Error> {
-        if self.version != 1
+        if !matches!((self.version, self.identity), (1, None) | (2, Some(_)))
             || self.epoch == 0
             || self.revision == 0
             || self.devices.is_empty()
@@ -107,6 +128,9 @@ impl Lineage {
             return Err(Error::Encoding);
         }
         vld0::validate_public_key(&self.root)?;
+        if let Some(identity) = self.identity {
+            vld0::validate_public_key(&identity)?;
+        }
         for device in &self.devices {
             vld0::validate_public_key(device)?;
             if *device == self.root {
@@ -197,15 +221,28 @@ impl PairingRequest {
     }
 }
 
+fn legacy_transfer() -> u8 {
+    1
+}
+fn is_legacy_transfer(version: &u8) -> bool {
+    *version == 1
+}
+
 /// Root transfer to exactly one proven device. Contains no clear secret.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PairingGrant {
+    /// Transfer format: 1 epoch root; 2 adds identity; 3 adds historical opening roots.
+    #[serde(
+        default = "legacy_transfer",
+        skip_serializing_if = "is_legacy_transfer"
+    )]
+    pub version: u8,
     /// Exact request approved by the live device.
     pub request: PairingRequest,
     /// Updated root-signed device set.
     pub lineage: Lineage,
-    /// HPKE ciphertext containing only the root seed.
+    /// HPKE ciphertext containing epoch root and, in version 2, the common random identity root.
     pub sealed_root: Vec<u8>,
     /// Root signature authenticating the entire grant including ciphertext.
     pub signature: Signature,
@@ -214,16 +251,24 @@ pub struct PairingGrant {
 impl PairingGrant {
     pub(crate) fn aad(&self) -> Result<Vec<u8>, Error> {
         encode(
-            b"ckmg.pairing.root.v2\0",
+            match self.version {
+                1 => b"ckmg.pairing.root.v2\0".as_slice(),
+                2 => b"ckmg.pairing.root.v3\0".as_slice(),
+                3 => b"ckmg.pairing.root.v4\0".as_slice(),
+                _ => return Err(Error::Encoding),
+            },
             &(self.request.digest()?, self.lineage.digest()?),
         )
     }
     pub(crate) fn signed_bytes(&self) -> Result<Vec<u8>, Error> {
-        if self.sealed_root.len() != crate::vld0::SEALED_ROOT_BYTES {
-            return Err(Error::Encoding);
-        }
+        crate::vld0::validate_sealed_root(self.version, self.sealed_root.len())?;
         encode(
-            b"ckmg.pairing.grant.v1\0",
+            match self.version {
+                1 => b"ckmg.pairing.grant.v1\0",
+                2 => b"ckmg.pairing.grant.v2\0",
+                3 => b"ckmg.pairing.grant.v3\0",
+                _ => return Err(Error::Encoding),
+            },
             &(&self.request, &self.lineage, &self.sealed_root),
         )
     }
@@ -243,6 +288,12 @@ pub struct RootEnvelope {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Rotation {
+    /// Transfer format: 1 epoch root; 2 adds identity; 3 adds historical opening roots.
+    #[serde(
+        default = "legacy_transfer",
+        skip_serializing_if = "is_legacy_transfer"
+    )]
+    pub version: u8,
     /// Digest of the exact previous lineage.
     pub predecessor: [u8; 32],
     /// Previous root, whose signature authorizes succession.
@@ -260,7 +311,12 @@ pub struct Rotation {
 impl Rotation {
     pub(crate) fn aad(&self, device: PublicKey) -> Result<Vec<u8>, Error> {
         encode(
-            b"ckmg.rotation.root.v1\0",
+            match self.version {
+                1 => b"ckmg.rotation.root.v1\0".as_slice(),
+                2 => b"ckmg.rotation.root.v2\0".as_slice(),
+                3 => b"ckmg.rotation.root.v3\0".as_slice(),
+                _ => return Err(Error::Encoding),
+            },
             &(
                 self.predecessor,
                 self.previous_root,
@@ -280,13 +336,20 @@ impl Rotation {
                 .iter()
                 .zip(&self.lineage.devices)
                 .any(|(e, d)| {
-                    e.device != *d || e.sealed_root.len() != crate::vld0::SEALED_ROOT_BYTES
+                    e.device != *d
+                        || crate::vld0::validate_sealed_root(self.version, e.sealed_root.len())
+                            .is_err()
                 })
         {
             return Err(Error::Encoding);
         }
         encode(
-            b"ckmg.rotation.v1\0",
+            match self.version {
+                1 => b"ckmg.rotation.v1\0",
+                2 => b"ckmg.rotation.v2\0",
+                3 => b"ckmg.rotation.v3\0",
+                _ => return Err(Error::Encoding),
+            },
             &(
                 self.predecessor,
                 self.previous_root,
@@ -302,6 +365,9 @@ impl Rotation {
     pub fn verify(&self, previous: &Lineage) -> Result<(), Error> {
         previous.verify()?;
         self.lineage.verify()?;
+        if self.lineage.version != previous.version || self.lineage.identity != previous.identity {
+            return Err(Error::Unauthorized);
+        }
         let remaining: Vec<_> = previous
             .devices
             .iter()

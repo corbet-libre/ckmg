@@ -178,7 +178,13 @@ impl Authority for Guard {
             }
             if matches!(
                 request.action,
-                Action::Use | Action::Pair | Action::Rotate | Action::Restore
+                Action::Use
+                    | Action::UseTransport(_)
+                    | Action::LendDeviceSigner
+                    | Action::SignDeviceEd25519
+                    | Action::Pair
+                    | Action::Rotate
+                    | Action::Restore
             ) && !anchor.devices.contains(&request.device)
             {
                 return Err(Error::Revoked);
@@ -189,7 +195,13 @@ impl Authority for Guard {
         {
             return Err(Error::Unauthorized);
         }
-        if request.action != Action::Use {
+        if !matches!(
+            request.action,
+            Action::Use
+                | Action::UseTransport(_)
+                | Action::LendDeviceSigner
+                | Action::SignDeviceEd25519
+        ) {
             let evidence: [u8; 64] = request
                 .evidence
                 .try_into()

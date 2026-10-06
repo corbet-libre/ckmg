@@ -16,7 +16,26 @@ use zeroize::{Zeroize, Zeroizing};
 const VLD0_DOMAIN_SIGN: &[u8] = b"VLD0_SIGN";
 const HPKE_INFO: &[u8] = b"veilid-hpke/1VLD0";
 const HPKE_HEADER: &[u8] = b"\x01VLD0";
-pub(crate) const SEALED_ROOT_BYTES: usize = 5 + 32 + 32 + 16;
+pub(crate) fn sealed_root_bytes(version: u8) -> Result<usize, Error> {
+    match version {
+        1 => Ok(5 + 32 + 32 + 16),
+        2 => Ok(5 + 32 + 64 + 16),
+        _ => Err(Error::Encoding),
+    }
+}
+pub(crate) fn validate_sealed_root(version: u8, length: usize) -> Result<(), Error> {
+    if version == 3 {
+        let plain = length.checked_sub(5 + 32 + 16).ok_or(Error::Encoding)?;
+        if plain <= crate::MAX_CHECKPOINT_BYTES
+            && ((plain >= 73 && (plain - 33) % 40 == 0) || (plain >= 105 && (plain - 65) % 40 == 0))
+        {
+            return Ok(());
+        }
+    } else if sealed_root_bytes(version)? == length {
+        return Ok(());
+    }
+    Err(Error::Encoding)
+}
 const HPKE_ENC_LENGTH: usize = 32;
 
 type Kem = hpke::kem::X25519HkdfSha256;
@@ -99,13 +118,13 @@ pub fn hash(data: &[u8]) -> HashDigest {
     HashDigest::new(VLD0, *blake3::hash(data).as_bytes())
 }
 
-fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
+pub(crate) fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
     Ok(verifying_key(key)?.to_montgomery().to_bytes())
 }
 
 /// The X25519 secret an Ed25519 seed expands to: the raw first half of SHA-512(seed),
 /// clamped by X25519 itself (as in Veilid; not the reduced scalar).
-fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
+pub(crate) fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
     let mut expanded: [u8; 64] = Sha512::new()
         .chain_update(secret.as_slice())
         .finalize()
@@ -114,6 +133,23 @@ fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
     out.copy_from_slice(&expanded[..32]);
     expanded.zeroize();
     out
+}
+
+/// Original VLD0 node DH: Ed25519 conversion, contributory X25519, then
+/// BLAKE3("VLD0_CRYPT" || shared). Matches Veilid dd8e2cd's compute_dh.
+/// Both the raw agreement and its hash stay inside custody and wipe on drop.
+pub(crate) fn compute_dh(secret: &Secret, peer: &PublicKey) -> Result<Secret, Error> {
+    let public = x25519_dalek::PublicKey::from(x25519_public(peer)?);
+    let private = x25519_dalek::StaticSecret::from(*x25519_secret(secret));
+    let shared = private.diffie_hellman(&public);
+    if !shared.was_contributory() {
+        return Err(Error::InvalidKey);
+    }
+    let mut hasher = Zeroizing::new(blake3::Hasher::new());
+    hasher.update(b"VLD0_CRYPT");
+    hasher.update(shared.as_bytes());
+    let digest = Zeroizing::new(hasher.finalize());
+    Ok(Zeroizing::new(*digest.as_bytes()))
 }
 
 /// Seal `plaintext` to the holder of `recipient` (HPKE base mode).

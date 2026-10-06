@@ -1,4 +1,4 @@
-//! Deterministic custody from an opaque, high-entropy PRF secret.
+//! PRF-based wrapping/device derivation and private retained-root purpose derivation.
 //!
 //! Device-side cpky Passkeys acquires the secret; server-side ckyh Keyhole verifies
 //! authentication. This module has no WebAuthn adapter, options, credential IDs or
@@ -16,8 +16,10 @@ const RING_KEY_INFO: &[u8] = b"ckmg.keyring-key.v1\0";
 const LOCATION_INFO: &[u8] = b"ckmg.vault-location.v1\0";
 const IDENTITY_INFO: &[u8] = b"ckmg.identity-root.v1\0";
 const HOLDER_INFO: &[u8] = b"ckmg.passport-holder-seed.v1\0";
+const HOLDER_SEAL_INFO: &[u8] = b"ckmg.wallet-holder-seal.v1\0";
+const BALANCE_SEED_INFO: &[u8] = b"ckmg.wallet-balance-seed.v1\0";
+const BALANCE_SEAL_INFO: &[u8] = b"ckmg.wallet-balance-seal.v1\0";
 const DEVICE_INFO: &[u8] = b"ckmg.device-lineage-seed.v1\0";
-const LINEAGE_INFO: &[u8] = b"ckmg.member-lineage-seed.v1\0";
 
 /// Opaque 32-byte input from device-side Passkeys. Wiped on drop; no Debug,
 /// serialization, cloning or byte getter. This is not evidence of authentication.
@@ -37,17 +39,47 @@ impl PrfOutput {
 
 /// Stable identity custody for a separately selected wallet domain. Never send this
 /// capability or its public identity key to community services as a member ID.
-/// The holder seed stays private pending an upstream passport-engine integration;
-/// deriving it is not passport issuance or proof of membership.
+/// The holder seed stays private. Wallet consumes a separately borrowed seed
+/// capability; Keys owns no Wallet engine, session, or installed passport.
 pub struct IdentityRoots {
     domain: String,
     identity: Secret,
     // Reserved for the upstream holder engine, never exposed as bytes or an RNG.
     passport_holder_seed: Secret,
+    holder_sealing_key: Secret,
+    balance_seed: Secret,
+    balance_sealing_key: Secret,
 }
 
 impl IdentityRoots {
-    /// Public identity verification key; independent of device/lineage rotations.
+    pub(crate) fn retained(
+        domain: &str,
+        device: crate::PublicKey,
+        common: &Secret,
+    ) -> Result<Self, Error> {
+        let _ = device;
+        identity_roots(&PrfOutput(common.clone()), domain)
+    }
+
+    #[cfg(feature = "passport")]
+    pub(crate) fn holder_seed(&self) -> HolderSeed<'_> {
+        HolderSeed {
+            seed: &self.passport_holder_seed,
+            sealing_key: &self.holder_sealing_key,
+            wallet_context: self.domain.as_bytes(),
+        }
+    }
+
+    #[cfg(feature = "wallet-engine")]
+    pub(crate) fn wallet_engine(&self) -> Result<cwlt_engine::Engine, Error> {
+        let mut seed = Zeroizing::new(*self.balance_seed);
+        let mut key = Zeroizing::new(*self.balance_sealing_key);
+        cwlt_engine::Engine::from_seed_and_sealing_key(&mut seed, &mut key, self.domain.as_bytes())
+            .map_err(|_| Error::Encoding)
+    }
+
+    /// Public identity verification key derived from the retained common random root.
+    /// Independent of the passkey wrapping it and of device/lineage rotations.
     pub fn public_key(&self) -> crate::PublicKey {
         crate::vld0::public_key(&self.identity)
     }
@@ -72,20 +104,29 @@ impl Drop for IdentityRoots {
         use zeroize::Zeroize;
         self.identity.zeroize();
         self.passport_holder_seed.zeroize();
+        self.holder_sealing_key.zeroize();
+        self.balance_seed.zeroize();
+        self.balance_sealing_key.zeroize();
     }
 }
 crate::lineage::redacted!(IdentityRoots);
 
-/// Reconstruct identity root and passport holder secret seed without storage or
-/// randomness. The wallet domain must be stable and isolated from community custody.
-/// Passport credentials themselves still need issuer renewal if their data is lost.
-pub fn identity_roots(prf: &PrfOutput, wallet_domain: &str) -> Result<IdentityRoots, Error> {
+// Kept private for legacy vector compatibility. New identities always supply the
+// retained random common root here, never an authenticator PRF. Existing labels
+// stay byte-identical; the versioned custody envelope identifies the source.
+fn identity_roots(prf: &PrfOutput, wallet_domain: &str) -> Result<IdentityRoots, Error> {
     let identity = expand(prf, IDENTITY_INFO, wallet_domain)?;
     let passport_holder_seed = expand(prf, HOLDER_INFO, wallet_domain)?;
+    let holder_sealing_key = expand(prf, HOLDER_SEAL_INFO, wallet_domain)?;
+    let balance_seed = expand(prf, BALANCE_SEED_INFO, wallet_domain)?;
+    let balance_sealing_key = expand(prf, BALANCE_SEAL_INFO, wallet_domain)?;
     Ok(IdentityRoots {
         domain: wallet_domain.into(),
         identity,
         passport_holder_seed,
+        holder_sealing_key,
+        balance_seed,
+        balance_sealing_key,
     })
 }
 
@@ -93,19 +134,55 @@ pub(crate) fn device_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Er
     expand(prf, DEVICE_INFO, community)
 }
 
-pub(crate) fn lineage_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Error> {
-    expand(prf, LINEAGE_INFO, community)
+/// Original device public key for binding this unlocked passkey session to a
+/// live server observation. This does not grant authority or expose custody.
+pub fn device_public_key(prf: &PrfOutput, community: &str) -> Result<crate::PublicKey, Error> {
+    Ok(crate::vld0::public_key(&device_seed(prf, community)?))
 }
 
-pub(crate) fn lineage_root(seed: &Secret, epoch: u64) -> Result<Secret, Error> {
-    if epoch == 0 {
-        return Err(Error::Encoding);
+#[cfg(feature = "profile-envelope")]
+pub(crate) fn profile_storage_key(common: &Secret, community: &str) -> Result<Secret, Error> {
+    expand(
+        &PrfOutput(common.clone()),
+        b"ckmg.profile-envelope-storage.v2\0",
+        community,
+    )
+}
+
+/// One-use holder-seed capability borrowed from freshly authorized Keys.
+/// No byte/RNG getter, callback, Clone, Debug or serialization is implemented.
+/// Wallet consumes it to initialize the maintained Pseudonyms engine; the engine
+/// and every subsequent holder operation belong to Wallet, never Keys.
+#[cfg(feature = "passport")]
+pub struct HolderSeed<'key> {
+    seed: &'key Secret,
+    sealing_key: &'key Secret,
+    wallet_context: &'key [u8],
+}
+
+#[cfg(feature = "passport")]
+impl HolderSeed<'_> {
+    /// Initialize the existing opaque holder, consuming the capability without
+    /// exposing the seed. This produces no credential or membership authority.
+    /// Wallet must load its authenticated checkpoint and retain lifecycle custody.
+    pub fn into_passport_holder(self) -> Result<cpsd::OpaqueHolder, Error> {
+        let mut seed = Zeroizing::new(**self.seed);
+        let mut key = Zeroizing::new(**self.sealing_key);
+        cpsd::OpaqueHolder::from_seed_and_sealing_key(&mut seed, &mut key, self.wallet_context)
+            .map_err(|_| Error::Encoding)
     }
-    let mut root = Zeroizing::new([0; 32]);
-    Hkdf::<Sha256>::new(Some(b"ckmg.lineage-root.v1"), seed.as_slice())
-        .expand(&epoch.to_be_bytes(), root.as_mut())
-        .map_err(|_| Error::Crypto)?;
-    Ok(root)
+
+    /// Open the original CPSD sealed holder under freshly authorized wallet custody.
+    /// The immutable sealing key is selected only here; neither it nor a plaintext
+    /// codec escapes. Wallet must still reconcile its actual compound checkpoint.
+    pub fn open_passport_holder(
+        self,
+        sealed: &cpsd::SealedHolder,
+    ) -> Result<cpsd::OpaqueHolder, Error> {
+        self.into_passport_holder()?
+            .restored(sealed)
+            .map_err(|_| Error::Open)
+    }
 }
 
 /// Opaque wrapping capability for storage adapters. Uses an independent HKDF label
@@ -113,6 +190,10 @@ pub(crate) fn lineage_root(seed: &Secret, epoch: u64) -> Result<Secret, Error> {
 pub struct StoreCipher(Secret);
 
 impl StoreCipher {
+    #[cfg(feature = "profile-envelope")]
+    pub(crate) fn envelope_legacy_key(&self) -> &[u8; 32] {
+        &self.0
+    }
     /// Wrap a bounded storage secret or record with authenticated owner context.
     pub fn seal(
         &self,
@@ -147,6 +228,16 @@ pub fn store_cipher(prf: &PrfOutput, community: &str) -> Result<StoreCipher, Err
     Ok(StoreCipher(expand(prf, STORE_PASSWORD_INFO, community)?))
 }
 
+/// Compound wrapping follows the current random root, never the stable identity
+/// seed or an individual authenticator. Only the Keys custody owner calls this.
+pub(crate) fn common_store_cipher(root: &Secret, community: &str) -> Result<StoreCipher, Error> {
+    Ok(StoreCipher(expand(
+        &PrfOutput(root.clone()),
+        b"ckmg.compound-store-root.v1\0",
+        community,
+    )?))
+}
+
 /// Derive the key that seals the private key material at rest. Independent of the
 /// storage capability (different HKDF info), so the ring stays sealed even to code that can
 /// read the store.
@@ -159,6 +250,79 @@ pub(crate) fn ring_key(prf: &PrfOutput, store: &str) -> Result<Secret, Error> {
 /// membership identity, and does not guarantee that a network retains its record.
 pub fn vault_location(prf: &PrfOutput, community: &str) -> Result<Locator, Error> {
     Ok(Locator(*expand(prf, LOCATION_INFO, community)?))
+}
+
+/// Read-only custody for this passkey's original DFLT(1) root record. The
+/// derivations are identical to `native_passkey_record`, on native and Wasm.
+/// This lends no writer, root, member-purpose key or current authority.
+/// The reader cannot outlive the consumed passkey unlock retained by Vault.
+///
+/// ```compile_fail
+/// let prf = ckmg::passkey::PrfOutput::from_bytes(&[7; 32]).unwrap();
+/// let reader = ckmg::passkey::passkey_record_reader(&prf, "garden").unwrap();
+/// drop(prf);
+/// let _ = reader.owner();
+/// ```
+pub struct PasskeyRecordReader<'prf> {
+    owner: crate::PublicKey,
+    read: Secret,
+    _unlock: std::marker::PhantomData<&'prf PrfOutput>,
+}
+impl PasskeyRecordReader<'_> {
+    pub(crate) fn into_session(self) -> PasskeyRecordReader<'static> {
+        PasskeyRecordReader {
+            owner: self.owner,
+            read: self.read,
+            _unlock: std::marker::PhantomData,
+        }
+    }
+
+    /// Public owner used with the fixed original DFLT(1) schema.
+    pub fn owner(&self) -> crate::PublicKey {
+        self.owner
+    }
+
+    /// Lend only the original read cipher, synchronously. The adapter must check
+    /// the original descriptor and value signatures before calling this method.
+    pub fn with_cipher<T>(
+        &self,
+        read: impl for<'key> FnOnce(crate::Vld0RecordCipher<'key>) -> T,
+    ) -> T {
+        read(crate::Vld0RecordCipher { secret: &self.read })
+    }
+}
+impl std::fmt::Debug for PasskeyRecordReader<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PasskeyRecordReader([redacted])")
+    }
+}
+
+/// Derive only the existing passkey-root record read capability. There is no
+/// arbitrary purpose selector and no authority inference from record absence.
+pub fn passkey_record_reader<'prf>(
+    prf: &'prf PrfOutput,
+    community: &str,
+) -> Result<PasskeyRecordReader<'prf>, Error> {
+    let owner = expand(prf, b"passkey-record-owner-v1\0", community)?;
+    Ok(PasskeyRecordReader {
+        owner: crate::vld0::public_key(&owner),
+        read: expand(prf, b"passkey-record-read-v1\0", community)?,
+        _unlock: std::marker::PhantomData,
+    })
+}
+
+/// Derive one passkey's private root-record initializer before unlocking custody.
+/// Core derives its canonical DFLT(1) key; the local checkpoint locator is unrelated.
+/// This grants no membership or G3 authority, and absence never creates an identity.
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+pub fn native_passkey_record(
+    prf: &PrfOutput,
+    community: &str,
+) -> Result<crate::NativeRecordInitializer, Error> {
+    let owner = expand(prf, b"passkey-record-owner-v1\0", community)?;
+    let read = expand(prf, b"passkey-record-read-v1\0", community)?;
+    let schema = crate::NativeRecordSchema::dflt(1).map_err(|_| Error::Encoding)?;
+    Ok(crate::native_record::owner(schema, &owner, &read))
 }
 
 fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 32]>, Error> {
@@ -176,102 +340,5 @@ fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 3
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn hkdf_derivation_matches_independent_hmac_vectors() {
-        // Independently evaluated from RFC 5869 Extract + one Expand block (L=32).
-        let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
-        let hex = |bytes: &[u8]| data_encoding::HEXLOWER.encode(bytes);
-        assert_eq!(
-            hex(vault_location(&prf, "a").unwrap().as_bytes()),
-            "c5086bf525ec6e443a5a0592e044e1d0fdfcde4b7d8d0c6195b3565fcc02690a"
-        );
-        assert_eq!(
-            hex(ring_key(&prf, "a").unwrap().as_slice()),
-            "1f267040dddfa9cbf9d26075ae78d90ff69a5a1fc98d7242a30ae770b0db6b64"
-        );
-        assert_eq!(
-            hex(store_cipher(&prf, "a").unwrap().0.as_slice()),
-            "767cc54cee7a526522277a226fa0aeb6671f2040a9fc768743f1820b9a88ab4b"
-        );
-        let roots = identity_roots(&prf, "a").unwrap();
-        assert_eq!(
-            hex(roots.identity.as_slice()),
-            "305fd593f6b34de15c321bd2daddf61034fd5185347d68d2d4bfcae20dc2e740"
-        );
-        assert_eq!(
-            hex(roots.passport_holder_seed.as_slice()),
-            "fb89d2196c2d2f07a23f69c7b3f6d919a10f71e8609bc211eaf0000f0050c68f"
-        );
-        assert_eq!(
-            hex(device_seed(&prf, "a").unwrap().as_slice()),
-            "cda24928113648d6cd3dc9f1d83e96cae9cb91d29491e4a75d7c9b61dfefba0f"
-        );
-        let seed = lineage_seed(&prf, "a").unwrap();
-        assert_eq!(
-            hex(seed.as_slice()),
-            "7c7b50366ada27df5c5bbf1519e0523fa92dfd7b2197abe488918e3ee4b1cd44"
-        );
-        assert_eq!(
-            hex(lineage_root(&seed, 1).unwrap().as_slice()),
-            "ab89538e361da6c46348c22a983be09ba3f078f7e4152c797d6857c89ecc3d0f"
-        );
-    }
-
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    fn all_roots_restore_without_storage_and_separate_domains() {
-        let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
-        let other = PrfOutput::from_bytes(&[28; 32]).unwrap();
-        let a = identity_roots(&prf, "a").unwrap();
-        let restored = identity_roots(&prf, "a").unwrap();
-        assert_eq!(a.identity, restored.identity);
-        assert_eq!(a.passport_holder_seed, restored.passport_holder_seed);
-        for different in [
-            identity_roots(&prf, "b").unwrap(),
-            identity_roots(&other, "a").unwrap(),
-        ] {
-            assert_ne!(a.identity, different.identity);
-            assert_ne!(a.passport_holder_seed, different.passport_holder_seed);
-        }
-        let seed = lineage_seed(&prf, "a").unwrap();
-        let branches = [
-            a.identity.clone(),
-            a.passport_holder_seed.clone(),
-            device_seed(&prf, "a").unwrap(),
-            seed.clone(),
-            lineage_root(&seed, 1).unwrap(),
-            lineage_root(&seed, 2).unwrap(),
-            ring_key(&prf, "a").unwrap(),
-            store_cipher(&prf, "a").unwrap().0,
-        ];
-        for (i, value) in branches.iter().enumerate() {
-            for other in &branches[i + 1..] {
-                assert_ne!(value, other);
-            }
-        }
-        let signature = a.prove_possession(b"challenge").unwrap();
-        crate::verify(
-            &restored.public_key(),
-            &restored.proof_transcript(b"challenge").unwrap(),
-            &signature,
-        )
-        .unwrap();
-        assert!(
-            crate::verify(
-                &restored.public_key(),
-                &restored.proof_transcript(b"other").unwrap(),
-                &signature
-            )
-            .is_err()
-        );
-        assert!(lineage_root(&seed, 0).is_err());
-        for domain in ["", "bad\0domain", &"a".repeat(257)] {
-            assert!(identity_roots(&prf, domain).is_err());
-            assert!(vault_location(&prf, domain).is_err());
-        }
-    }
-}
+#[path = "../tests/unit/passkey.rs"]
+mod tests;
