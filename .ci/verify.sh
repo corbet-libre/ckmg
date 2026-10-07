@@ -53,6 +53,10 @@ coverage_target="$(mktemp -d)"
 case "$coverage_target" in ""|"$PWD"/*) echo 'unsafe coverage target' >&2; exit 2;; esac
 trap 'rm -rf -- "$coverage_target"' EXIT
 export CARGO_TARGET_DIR="$coverage_target"
-"$NIGHTLY_CARGO" llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly --ignore-filename-regex '(/tests/|/tests\.rs$)' --json --output-path coverage.json
+CARGO_PROFILE_TEST_OPT_LEVEL=0 "$NIGHTLY_CARGO" llvm-cov --locked --workspace --all-features --branch --no-cfg-coverage --no-cfg-coverage-nightly --ignore-filename-regex '(/tests/|/tests\.rs$)' --json --output-path coverage.json 2>&1
+"$NIGHTLY_CARGO" llvm-cov report --locked --branch --ignore-filename-regex '(/tests/|/tests\.rs$)' --lcov --output-path coverage.lcov 2>&1
+"$NIGHTLY_CARGO" llvm-cov report --locked --branch --ignore-filename-regex '(/tests/|/tests\.rs$)' --text --output-path coverage.txt 2>&1
 )
-python3 .github/check-coverage.py coverage.json
+python3 .github/check-coverage.py coverage.json 2>&1 || true
+python3 .github/test-source-coverage.py 2>&1
+python3 .github/check-source-coverage.py coverage.lcov coverage.json coverage.txt 2>&1

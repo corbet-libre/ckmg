@@ -374,7 +374,7 @@ impl KeyCertificate {
 
 pub(crate) fn encode<T: Serialize>(domain: &[u8], value: &T) -> Result<Vec<u8>, Error> {
     let mut bytes = domain.to_vec();
-    serde_json::to_writer(&mut bytes, value).map_err(|_| Error::Encoding)?;
+    serde_json::to_writer(&mut bytes, value).map_err(crate::error::redact(Error::Encoding))?;
     if bytes.len() > MAX_MESSAGE_BYTES {
         return Err(Error::Limit);
     }

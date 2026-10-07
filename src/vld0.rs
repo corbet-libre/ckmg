@@ -47,7 +47,7 @@ fn prehash(data: &[u8]) -> Sha512 {
 pub(crate) fn sign(secret: &Secret, data: &[u8]) -> Result<Signature, Error> {
     let signature = SigningKey::from_bytes(secret)
         .sign_prehashed(prehash(data), Some(VLD0_DOMAIN_SIGN))
-        .map_err(|_| Error::Crypto)?;
+        .map_err(crate::error::redact(Error::Crypto))?;
     Ok(Signature::new(VLD0, signature.to_bytes()))
 }
 
@@ -55,7 +55,8 @@ fn verifying_key(key: &PublicKey) -> Result<VerifyingKey, Error> {
     if key.kind() != VLD0 {
         return Err(Error::UnsupportedKind);
     }
-    let verifying = VerifyingKey::from_bytes(key.value()).map_err(|_| Error::InvalidKey)?;
+    let verifying =
+        VerifyingKey::from_bytes(key.value()).map_err(crate::error::redact(Error::InvalidKey))?;
     if verifying.is_weak() {
         return Err(Error::InvalidKey);
     }
@@ -70,7 +71,7 @@ pub fn verify(key: &PublicKey, data: &[u8], signature: &Signature) -> Result<(),
     let signature = ed25519_dalek::Signature::from_bytes(signature.value());
     verifying_key(key)?
         .verify_prehashed_strict(prehash(data), Some(VLD0_DOMAIN_SIGN), &signature)
-        .map_err(|_| Error::BadSignature)
+        .map_err(crate::error::redact(Error::BadSignature))
 }
 
 /// Check that `key` is a usable VLD0 public key (on the curve, not weak).
@@ -85,13 +86,14 @@ pub fn verify_ed25519(
     data: &[u8],
     signature: &[u8; 64],
 ) -> Result<(), Error> {
-    let verifying = VerifyingKey::from_bytes(public_key).map_err(|_| Error::InvalidKey)?;
+    let verifying =
+        VerifyingKey::from_bytes(public_key).map_err(crate::error::redact(Error::InvalidKey))?;
     if verifying.is_weak() {
         return Err(Error::InvalidKey);
     }
     verifying
         .verify_strict(data, &ed25519_dalek::Signature::from_bytes(signature))
-        .map_err(|_| Error::BadSignature)
+        .map_err(crate::error::redact(Error::BadSignature))
 }
 
 /// VLD0 `generate_hash`: BLAKE3.
@@ -125,7 +127,7 @@ pub(crate) fn seal_to(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let recipient = <Kem as hpke::Kem>::PublicKey::from_bytes(&x25519_public(recipient)?)
-        .map_err(|_| Error::InvalidKey)?;
+        .map_err(crate::error::redact(Error::InvalidKey))?;
     let (enc, ciphertext) = hpke::single_shot_seal_with_rng::<Aead, Kdf, Kem>(
         &OpModeS::Base,
         &recipient,
@@ -134,7 +136,7 @@ pub(crate) fn seal_to(
         associated_data,
         &mut rand_chacha::ChaCha20Rng::from_seed(*random_secret(rng)?),
     )
-    .map_err(|_| Error::Crypto)?;
+    .map_err(crate::error::redact(Error::Crypto))?;
     let enc = enc.to_bytes();
     let mut out = Vec::with_capacity(5 + HPKE_ENC_LENGTH + ciphertext.len());
     out.extend_from_slice(HPKE_HEADER);
@@ -156,9 +158,9 @@ pub(crate) fn open(
         return Err(Error::UnsupportedKind);
     }
     let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&sealed[5..5 + HPKE_ENC_LENGTH])
-        .map_err(|_| Error::Open)?;
+        .map_err(crate::error::redact(Error::Open))?;
     let private = <Kem as hpke::Kem>::PrivateKey::from_bytes(x25519_secret(secret).as_slice())
-        .map_err(|_| Error::Crypto)?;
+        .map_err(crate::error::redact(Error::Crypto))?;
     hpke::single_shot_open::<Aead, Kdf, Kem>(
         &OpModeR::Base,
         &private,
@@ -168,7 +170,7 @@ pub(crate) fn open(
         associated_data,
     )
     .map(Zeroizing::new)
-    .map_err(|_| Error::Open)
+    .map_err(crate::error::redact(Error::Open))
 }
 
 /// Plain Ed25519 for owner formats (COSE/OpenMLS/cgrd) that do not use Ed25519ph.

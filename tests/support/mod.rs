@@ -103,12 +103,15 @@ impl Clock for Time {
 pub struct Random {
     rng: rand_chacha::ChaCha20Rng,
     pub fail: Rc<Cell<bool>>,
+    /// Remaining successful draws; `usize::MAX` means unlimited.
+    pub budget: Rc<Cell<usize>>,
 }
 impl Random {
     pub fn new(seed: u8) -> Self {
         Self {
             rng: rand_chacha::ChaCha20Rng::from_seed([seed; 32]),
             fail: Rc::new(Cell::new(false)),
+            budget: Rc::new(Cell::new(usize::MAX)),
         }
     }
 }
@@ -116,6 +119,13 @@ impl Entropy for Random {
     fn fill(&mut self, bytes: &mut [u8]) -> Result<(), Error> {
         if self.fail.get() {
             return Err(Error::Randomness);
+        }
+        let left = self.budget.get();
+        if left == 0 {
+            return Err(Error::Randomness);
+        }
+        if left != usize::MAX {
+            self.budget.set(left - 1);
         }
         self.rng.fill_bytes(bytes);
         Ok(())

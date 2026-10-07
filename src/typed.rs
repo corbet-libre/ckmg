@@ -106,11 +106,11 @@ macro_rules! typed_bytes {
             fn from_str(s: &str) -> Result<Self, Error> {
                 if s.len() != 5 + (($len as usize) * 8).div_ceil(6) { return Err(Error::Encoding); }
                 let (kind, value) = s.split_once(':').ok_or(Error::Encoding)?;
-                let kind: [u8; 4] = kind.as_bytes().try_into().map_err(|_| Error::Encoding)?;
+                let kind: [u8; 4] = kind.as_bytes().try_into().map_err(crate::error::redact(Error::Encoding))?;
                 let bytes = BASE64URL_NOPAD
                     .decode(value.as_bytes())
-                    .map_err(|_| Error::Encoding)?;
-                let value: [u8; $len] = bytes.try_into().map_err(|_| Error::Encoding)?;
+                    .map_err(crate::error::redact(Error::Encoding))?;
+                let value: [u8; $len] = bytes.try_into().map_err(crate::error::redact(Error::Encoding))?;
                 Ok(Self { kind: CryptoKind(kind), value })
             }
         }

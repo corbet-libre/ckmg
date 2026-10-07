@@ -104,7 +104,7 @@ pub(crate) fn lineage_root(seed: &Secret, epoch: u64) -> Result<Secret, Error> {
     let mut root = Zeroizing::new([0; 32]);
     Hkdf::<Sha256>::new(Some(b"ckmg.lineage-root.v1"), seed.as_slice())
         .expand(&epoch.to_be_bytes(), root.as_mut())
-        .map_err(|_| Error::Crypto)?;
+        .map_err(crate::error::redact(Error::Crypto))?;
     Ok(root)
 }
 
@@ -171,7 +171,7 @@ fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 3
     let mut out = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(HKDF_SALT), prf.0.as_slice())
         .expand(&info, out.as_mut())
-        .map_err(|_| Error::Crypto)?;
+        .map_err(crate::error::redact(Error::Crypto))?;
     Ok(out)
 }
 

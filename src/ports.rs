@@ -79,7 +79,7 @@ pub struct SystemEntropy;
 
 impl Entropy for SystemEntropy {
     fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
-        getrandom::fill(output).map_err(|_| Error::Randomness)
+        getrandom::fill(output).map_err(crate::error::redact(Error::Randomness))
     }
 }
 

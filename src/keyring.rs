@@ -77,15 +77,15 @@ pub(crate) fn seal(
     let mut nonce = [0; 24];
     rng.fill(&mut nonce)?;
     let ciphertext = XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| Error::Crypto)?
+        .map_err(crate::error::redact(Error::Crypto))?
         .encrypt(
-            &XNonce::try_from(nonce.as_slice()).map_err(|_| Error::Crypto)?,
+            &XNonce::try_from(nonce.as_slice()).map_err(crate::error::redact(Error::Crypto))?,
             Payload {
                 msg: plaintext,
                 aad,
             },
         )
-        .map_err(|_| Error::Crypto)?;
+        .map_err(crate::error::redact(Error::Crypto))?;
     let mut result = Vec::with_capacity(24 + ciphertext.len());
     result.extend_from_slice(&nonce);
     result.extend_from_slice(&ciphertext);
@@ -98,14 +98,14 @@ pub(crate) fn open(key: &Secret, aad: &[u8], sealed: &[u8]) -> Result<Zeroizing<
     }
     let (nonce, ciphertext) = sealed.split_at(24);
     XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| Error::Crypto)?
+        .map_err(crate::error::redact(Error::Crypto))?
         .decrypt(
-            &XNonce::try_from(nonce).map_err(|_| Error::Open)?,
+            &XNonce::try_from(nonce).map_err(crate::error::redact(Error::Open))?,
             Payload {
                 msg: ciphertext,
                 aad,
             },
         )
         .map(Zeroizing::new)
-        .map_err(|_| Error::Open)
+        .map_err(crate::error::redact(Error::Open))
 }

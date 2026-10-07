@@ -46,5 +46,12 @@ pub(crate) type Secret = zeroize::Zeroizing<[u8; 32]>;
 #[cfg(test)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+// The shared test fixtures are also compiled as an integration-test support module,
+// which names this crate as `ckmg`.
+#[cfg(test)]
+extern crate self as ckmg;
+
+#[cfg(test)]
+mod tests;
 #[cfg(test)]
 mod veilid_reference_tests;

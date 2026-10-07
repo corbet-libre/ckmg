@@ -406,7 +406,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .store
             .load(&location)
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(crate::error::redact(Error::Unavailable))?
         else {
             self.state = State::MissingCheckpoint;
             return Err(Error::MissingCheckpoint);
@@ -706,7 +706,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .store
             .load(&location)
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(crate::error::redact(Error::Unavailable))?
             .is_some()
         {
             return Err(Error::RootExists);
@@ -1349,7 +1349,9 @@ fn encode_checkpoint(
     metadata: &Metadata,
     material: &Material,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
-    let metadata = Zeroizing::new(serde_json::to_vec(metadata).map_err(|_| Error::Encoding)?);
+    let metadata = Zeroizing::new(
+        serde_json::to_vec(metadata).map_err(crate::error::redact(Error::Encoding))?,
+    );
     if metadata.len() + 69 > MAX_CHECKPOINT_BYTES - 64 {
         return Err(Error::Limit);
     }
@@ -1362,10 +1364,14 @@ fn encode_checkpoint(
 
 fn decode_checkpoint(bytes: &[u8]) -> Result<(Metadata, Material), Error> {
     let length = bytes.get(..4).ok_or(Error::Encoding)?;
-    let length = u32::from_le_bytes(length.try_into().map_err(|_| Error::Encoding)?) as usize;
+    let length = u32::from_le_bytes(
+        length
+            .try_into()
+            .map_err(crate::error::redact(Error::Encoding))?,
+    ) as usize;
     let end = 4usize.checked_add(length).ok_or(Error::Encoding)?;
     let metadata = serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
-        .map_err(|_| Error::Encoding)?;
+        .map_err(crate::error::redact(Error::Encoding))?;
     let material = Material::parse(bytes.get(end..).ok_or(Error::Encoding)?)?;
     Ok((metadata, material))
 }
@@ -1429,3 +1435,7 @@ fn purpose_secret(current: &Open, purpose: &Purpose, symmetric: bool) -> Result<
     };
     Ok(Zeroizing::new(blake3::derive_key(domain, &material)))
 }
+
+#[cfg(test)]
+#[path = "tests/keys_internal.rs"]
+mod internal_tests;
