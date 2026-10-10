@@ -62,8 +62,9 @@ pub use lineage::{
 };
 pub use node_cipher::Vld0NodeCipher;
 pub use ports::{
-    Action, Authority, Authorization, Clock, Commit, DeviceSigning, Entropy, Locator,
-    MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES, NodePurpose, SecureStore, SystemEntropy,
+    Action, Authority, Authorization, Clock, Commit, DeviceSigning, Entropy, GenesisAuthorization,
+    Locator, MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES, NodePurpose, SecureStore,
+    SystemEntropy,
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
 pub use record_cipher::{Vld0RecordCipher, Vld0RecordReader};

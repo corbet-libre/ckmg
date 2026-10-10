@@ -2,6 +2,7 @@
 use super::*;
 
 mod lineage;
+pub(in crate::keys) use lineage::lineage_secret;
 pub use lineage::{LineageReadCustody, ProvisionalLineage};
 
 #[cfg(test)]

@@ -208,6 +208,29 @@ pub struct Authorization<'a> {
     pub evidence: &'a [u8],
 }
 
+/// Exact first-lineage payload, not current member authority. The enclosing
+/// owner must decode its canonical packed evidence and verify this original
+/// receipt's certificate/assertion against current policy and fresh HTTPS device
+/// membership after its waits. A login assertion cannot replace the receipt's
+/// dedicated passkey challenge. No generic root signing is authorized.
+pub struct GenesisAuthorization<'a> {
+    /// Exact original durable Created receipt, including its device attestation.
+    pub receipt: &'a crate::Receipt,
+    /// Exact packed plaintext that the fixed CDHT lineage value will encrypt.
+    pub evidence: &'a [u8],
+    /// Current injected Unix-second observation.
+    pub now: u64,
+    /// Exclusive trusted request deadline; the owner must also bound it by its
+    /// actual session, certificate, assertion and current policy lifetimes.
+    pub expires: u64,
+}
+
+impl std::fmt::Debug for GenesisAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GenesisAuthorization([redacted])")
+    }
+}
+
 impl std::fmt::Debug for Authorization<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Authorization")
@@ -235,4 +258,22 @@ impl std::fmt::Debug for Authorization<'_> {
 pub trait Authority {
     /// Authorize this exact request or refuse with a coarse error.
     fn check(&mut self, request: Authorization<'_>) -> impl Future<Output = Result<(), Error>>;
+
+    /// Dedicated, one-attempt certified genesis admission. Existing authorities
+    /// refuse by default; Create, transport use or normal Use cannot substitute.
+    fn check_genesis(
+        &mut self,
+        _request: GenesisAuthorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// Reborrow original current policy and check the retained owner membership
+    /// observation at the point of use, after Keys' final Store wait. Verify the
+    /// same exact request, live session/device generation, nonregressing clock
+    /// and exclusive deadlines. No cached boolean or synthetic lease suffices.
+    /// This callback performs no I/O and must not retain borrowed request bytes.
+    fn check_genesis_current(&mut self, _request: GenesisAuthorization<'_>) -> Result<(), Error> {
+        Err(Error::Unauthorized)
+    }
 }

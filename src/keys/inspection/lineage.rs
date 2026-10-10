@@ -101,6 +101,13 @@ impl CheckpointBootstrap {
 }
 
 fn lineage_reader(root: &Secret, lineage: &Lineage) -> Result<LineageReadCustody, Error> {
+    Ok(LineageReadCustody {
+        owner: lineage.root,
+        read: lineage_secret(root, lineage)?,
+    })
+}
+
+pub(in crate::keys) fn lineage_secret(root: &Secret, lineage: &Lineage) -> Result<Secret, Error> {
     let purpose = Purpose::new(Scope::Member, "vault.lineage", 0)?;
     let context = encode(
         b"ckmg.purpose.context.v1\0",
@@ -113,11 +120,8 @@ fn lineage_reader(root: &Secret, lineage: &Lineage) -> Result<LineageReadCustody
         ),
     )?;
     let cipher = derive_purpose_secret(root, &context, true);
-    Ok(LineageReadCustody {
-        owner: lineage.root,
-        read: Zeroizing::new(blake3::derive_key(
-            "ckmg 2026-10 VLD0 record encryption v1",
-            &*cipher,
-        )),
-    })
+    Ok(Zeroizing::new(blake3::derive_key(
+        "ckmg 2026-10 VLD0 record encryption v1",
+        &*cipher,
+    )))
 }

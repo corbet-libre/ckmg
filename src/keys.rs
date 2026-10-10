@@ -12,6 +12,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+mod genesis;
 mod inspection;
 mod transport;
 pub use inspection::{
@@ -338,6 +339,7 @@ pub struct Keys<S, C, R, A> {
     open: Option<Open>,
     prepared: Option<Prepared>,
     last_time: u64,
+    genesis: Option<genesis::InitialPublication>,
     #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
     tor_custody: crate::native_tor::Custody,
     #[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
@@ -365,6 +367,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             open: None,
             prepared: None,
             last_time: 0,
+            genesis: None,
             #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
             tor_custody: crate::native_tor::Custody::default(),
             #[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
@@ -386,6 +389,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.browser_tor_custody.close();
         self.open = None;
         self.prepared = None;
+        self.genesis = None;
         self.state = State::Locked;
     }
 
@@ -492,7 +496,11 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             now,
             evidence,
         })
-        .await
+        .await?;
+        if action == Action::Use {
+            self.genesis = None;
+        }
+        Ok(())
     }
 
     async fn check_authority(&mut self, request: Authorization<'_>) -> Result<(), Error> {
@@ -601,7 +609,12 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let change = Change::Created(lineage.clone());
         let candidate = self.initial(prf, location, material, info, lineage, None)?;
         self.prepare(candidate, None, Some(change))?;
-        self.commit().await?.ok_or(Error::Crypto)
+        let receipt = self.commit().await?.ok_or(Error::Crypto)?;
+        self.genesis = Some(genesis::InitialPublication::new(
+            receipt.operation,
+            self.loaded()?.stamp,
+        ));
+        Ok(receipt)
     }
 
     /// Reconstitute an absent checkpoint for an existing member. The same PRF derives

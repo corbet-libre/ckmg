@@ -271,3 +271,39 @@ default is only for standalone sealed-checkpoint stores with no outer wrapper.
 `migrate_compound_wrapping` explicitly forces this handoff for a legacy wrapper,
 advancing the Keys checkpoint and enclosing Store fence together. No owned cipher
 escapes Keys; failed/cancelled writes require original reconciliation.
+
+## Initial lineage publication
+
+Successful original `Create` arms one private, session-local genesis attempt,
+bound to the exact durable pending Created receipt and Keys checkpoint stamp.
+The marker is consumed before any await; lock, failed custody and normal member
+Use destroy it. Unlock and restore never recreate it. Reading the original
+pending receipt preserves it.
+
+`prepare_genesis_record` produces only the original CDHT root-owned DFLT(1)
+descriptor and subkey-zero, sequence-zero encrypted value. Keys retains the
+root signer internally and uses the existing lineage read-key derivation and
+maintained record cipher. The supplied plaintext is the exact final packed
+evidence; CVLT owns canonical packing and verifies its original receipt,
+certificate and dedicated passkey assertion. Dedicated asynchronous genesis
+admission and a synchronous current-owner check after the final Store wait both
+refuse by default. The latter must reborrow current policy and check the actual
+session/device observation and exclusive deadlines. No generic signer, cipher,
+native record initializer, member Use or recovery checkpoint is granted.
+
+The original CDHT state containing these exact signed outputs must be durably
+retained in the encrypted publication outbox before network flushing. Unknown
+network completion permits only reconciliation or retransmission of those same
+bytes, never regeneration with another nonce. Producing outputs proves neither
+durable outbox acceptance nor successful network publication. The production
+final-check adapter still needs the original membership observation and its
+session/device generation, monotonic deadline and a fresh CurrentPolicy reborrow;
+this library supplies no accepting substitute.
+
+The pending checkpoint inspection refusal remains in force. Certified genesis
+publication and a forced current-lineage read precede normal authority; only
+then may the exact receipt be durably acknowledged and the acknowledged recovery
+checkpoint published. Crash continuation and production registration, current
+certificate/assertion, HTTPS and publication integration remain separate work.
+The new owner tests have not executed; no native/browser coverage or complete
+production genesis acceptance is claimed.
