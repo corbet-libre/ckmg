@@ -291,6 +291,13 @@ refuse by default. The latter must reborrow current policy and check the actual
 session/device observation and exclusive deadlines. No generic signer, cipher,
 native record initializer, member Use or recovery checkpoint is granted.
 
+Both genesis checks receive the authority reference from the exact authenticated
+Created checkpoint. The original creating composer must bind that DeviceInfo
+reference to the credential ID from the actual CPky registration/PRF result.
+The verified current certificate must name that same original credential. A
+different enrolled passkey of the same member signing the public receipt is not
+sufficient; the device's PRF derivation alone does not prove this certificate join.
+
 The original CDHT state containing these exact signed outputs must be durably
 retained in the encrypted publication outbox before network flushing. Unknown
 network completion permits only reconciliation or retransmission of those same
@@ -315,6 +322,11 @@ pending Created checkpoint: local revision one, signed epoch/revision one,
 sole original device, exact attested receipt and matching root material.
 Ordinary inspection and bootstrap still refuse Pending. This separate sealed
 owner never constructs Keys, restores a genesis marker or admits Create/Use.
+
+The pending owner also privately retains the original sealed DeviceInfo authority
+reference. Every asynchronous and final synchronous completion check receives
+that exact reference, and must compare it with the original verified certificate's
+credential ID. It cannot be replaced by a caller-selected current passkey.
 
 `authorize_completion` consumes that owner and freezes the complete durable
 Prepared intent: exact outer generation/digest, inner version/operation/digest,

@@ -216,6 +216,10 @@ pub struct Authorization<'a> {
 pub struct GenesisAuthorization<'a> {
     /// Exact original durable Created receipt, including its device attestation.
     pub receipt: &'a crate::Receipt,
+    /// Exact authority reference authenticated in the original Created Keys
+    /// checkpoint. The creation composer must have bound it to the original
+    /// CPky credential ID; require that same ID in the verified certificate.
+    pub authority_reference: &'a [u8],
     /// Exact packed plaintext that the fixed CDHT lineage value will encrypt.
     pub evidence: &'a [u8],
     /// Current injected Unix-second observation.
@@ -240,6 +244,9 @@ impl std::fmt::Debug for GenesisAuthorization<'_> {
 pub struct CompletionAuthorization<'a> {
     /// Exact pending Created receipt authenticated by the original Keys decoder.
     pub receipt: &'a crate::Receipt,
+    /// Original sealed DeviceInfo reference, never a caller-selected current
+    /// passkey. The verified certificate must name this exact original ID.
+    pub authority_reference: &'a [u8],
     /// Original fixed PRF-derived local Keys slot.
     pub location: &'a Locator,
     /// Digest of the exact original pending encrypted Keys entry.

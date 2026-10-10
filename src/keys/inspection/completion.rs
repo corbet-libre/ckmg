@@ -33,6 +33,7 @@ redacted!(CompletionIntent);
 pub struct PendingCreation {
     root: Secret,
     receipt: Receipt,
+    authority_reference: Vec<u8>,
     location: Locator,
     sealed_digest: [u8; 32],
     last_time: u64,
@@ -53,6 +54,7 @@ impl CheckpointInspector {
         Ok(PendingCreation {
             root: material.root.take().ok_or(Error::NoRoot)?,
             receipt: receipt.clone(),
+            authority_reference: metadata.info.authority_reference().to_vec(),
             location: self.location,
             sealed_digest: *blake3::hash(sealed).as_bytes(),
             last_time: metadata.last_time,
@@ -103,6 +105,7 @@ impl PendingCreation {
         let owner_floor = authority
             .check_completion(crate::CompletionAuthorization {
                 receipt: &self.receipt,
+                authority_reference: &self.authority_reference,
                 location: &self.location,
                 sealed_digest: &self.sealed_digest,
                 intent: &intent,
@@ -169,6 +172,7 @@ impl PendingCompletion {
         let owner_floor = authority
             .check_completion_current(crate::CompletionAuthorization {
                 receipt: &self.source.receipt,
+                authority_reference: &self.source.authority_reference,
                 location: &self.source.location,
                 sealed_digest: &self.source.sealed_digest,
                 intent: &self.intent,

@@ -103,6 +103,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         }
         self.refresh().await?;
         initial.check(self.loaded()?, receipt)?;
+        let authority_reference = self.loaded()?.metadata.info.authority_reference().to_vec();
         let now = self.now()?;
         if now >= expires {
             return Err(Error::Expired);
@@ -111,6 +112,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .authority
             .check_genesis(crate::GenesisAuthorization {
                 receipt,
+                authority_reference: &authority_reference,
                 evidence: canonical_evidence,
                 now,
                 expires,
@@ -141,6 +143,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .authority
             .check_genesis_current(crate::GenesisAuthorization {
                 receipt,
+                authority_reference: &authority_reference,
                 evidence: canonical_evidence,
                 now: completed,
                 expires,

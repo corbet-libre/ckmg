@@ -153,6 +153,7 @@ impl CompletionOwner {
         let actual = request.intent;
         let expected = &self.expected;
         if request.receipt != &self.receipt
+            || request.authority_reference != b"credential"
             || request.location != &self.location
             || request.sealed_digest != &self.sealed_digest
             || actual.outer_generation != expected.outer_generation
@@ -560,6 +561,7 @@ shared!(
             keys.authority
                 .check_completion_current(crate::CompletionAuthorization {
                     receipt: pending.receipt(),
+                    authority_reference: b"credential",
                     location: pending.location(),
                     sealed_digest: pending.sealed_digest(),
                     intent: &frozen,
@@ -687,5 +689,31 @@ shared!(
                 .unwrap_err(),
             Error::Clock
         );
+    }
+);
+
+shared!(
+    pending_completion_keeps_the_original_authenticated_passkey_reference,
+    {
+        let (keys, prf, _, mut time) = fixture().await;
+        let original = keys.loaded().unwrap();
+        let mut metadata = original.metadata.clone();
+        // Authenticate another original DeviceInfo reference with the real owner
+        // format. Same member/root/device/receipt alone cannot admit key substitution.
+        metadata.info = DeviceInfo::new("fixture", b"other credential").unwrap();
+        let sealed = reseal(&prf, &metadata, &original.material);
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        assert_eq!(
+            pending
+                .authorize_completion(intent(), &mut time, &mut owner)
+                .await
+                .unwrap_err(),
+            Error::Unauthorized
+        );
+        assert_eq!(owner.final_checks, 0);
     }
 );

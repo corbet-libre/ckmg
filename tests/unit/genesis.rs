@@ -101,6 +101,7 @@ impl Authority for Owner {
         request: crate::GenesisAuthorization<'_>,
     ) -> Result<(), Error> {
         if self.receipt.borrow().as_ref() != Some(request.receipt)
+            || request.authority_reference != b"credential"
             || request.evidence != PAYLOAD
             || request.now != 1000
             || request.expires != 1060
@@ -133,6 +134,7 @@ impl Authority for Owner {
     ) -> Result<(), Error> {
         self.final_checks.set(self.final_checks.get() + 1);
         if self.receipt.borrow().as_ref() != Some(request.receipt)
+            || request.authority_reference != b"credential"
             || request.evidence != PAYLOAD
             || request.now != 1000
             || request.expires != 1060
@@ -145,6 +147,9 @@ impl Authority for Owner {
 }
 type Machine = Keys<Memory, Time, crate::SystemEntropy, Owner>;
 async fn fixture() -> (Machine, PrfOutput, Receipt, Rc<Cell<u8>>) {
+    fixture_with_reference(b"credential").await
+}
+async fn fixture_with_reference(reference: &[u8]) -> (Machine, PrfOutput, Receipt, Rc<Cell<u8>>) {
     let prf = PrfOutput::from_bytes(&[29; 32]).unwrap();
     let binding = Binding::new("genesis", "fixture").unwrap();
     let store = Memory::default();
@@ -171,7 +176,7 @@ async fn fixture() -> (Machine, PrfOutput, Receipt, Rc<Cell<u8>>) {
         .create_scope(
             &prf,
             binding,
-            DeviceInfo::new("fixture", b"credential").unwrap(),
+            DeviceInfo::new("fixture", reference).unwrap(),
             b"registration",
         )
         .await
@@ -383,6 +388,7 @@ shared!(existing_authorities_refuse_both_genesis_ports_by_default, {
         owner
             .check_genesis(crate::GenesisAuthorization {
                 receipt: &receipt,
+                authority_reference: b"credential",
                 evidence: PAYLOAD,
                 now: 1000,
                 expires: 1060
@@ -393,6 +399,7 @@ shared!(existing_authorities_refuse_both_genesis_ports_by_default, {
     assert_eq!(
         owner.check_genesis_current(crate::GenesisAuthorization {
             receipt: &receipt,
+            authority_reference: b"credential",
             evidence: PAYLOAD,
             now: 1000,
             expires: 1060
@@ -400,3 +407,17 @@ shared!(existing_authorities_refuse_both_genesis_ports_by_default, {
         Err(Error::Unauthorized)
     );
 });
+
+shared!(
+    original_genesis_reference_cannot_be_replaced_by_another_current_passkey,
+    {
+        let (mut keys, _, receipt, _) = fixture_with_reference(b"other credential").await;
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, PAYLOAD, 1060)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+        assert_eq!(keys.authority.final_checks.get(), 0);
+    }
+);
