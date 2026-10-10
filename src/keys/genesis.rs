@@ -11,30 +11,36 @@ impl InitialPublication {
     }
 
     fn check(&self, open: &Open, receipt: &Receipt) -> Result<(), Error> {
-        if self.operation != receipt.operation
-            || self.stamp != open.stamp
-            || open.metadata.output.as_ref() != Some(receipt)
-            || open.metadata.revoked
-            || open.metadata.pairing.is_some()
-        {
+        if self.operation != receipt.operation || self.stamp != open.stamp {
             return Err(Error::Unauthorized);
         }
-        let Change::Created(lineage) = &receipt.change else {
-            return Err(Error::Unauthorized);
-        };
-        let (attested, device) = receipt.attested_lineage()?;
-        if lineage != &open.metadata.lineage
-            || attested != lineage
-            || lineage.epoch != 1
-            || lineage.revision != 1
-            || lineage.devices.as_slice() != [device]
-            || device != vld0::public_key(&open.material.device)
-            || lineage.root != vld0::public_key(open.material.root()?)
-        {
-            return Err(Error::Unauthorized);
-        }
-        Ok(())
+        check_created(&open.metadata, &open.material, receipt)
     }
+}
+
+pub(in crate::keys) fn check_created(
+    metadata: &Metadata,
+    material: &Material,
+    receipt: &Receipt,
+) -> Result<(), Error> {
+    if metadata.output.as_ref() != Some(receipt) || metadata.revoked || metadata.pairing.is_some() {
+        return Err(Error::Unauthorized);
+    }
+    let Change::Created(lineage) = &receipt.change else {
+        return Err(Error::Unauthorized);
+    };
+    let (attested, device) = receipt.attested_lineage()?;
+    if lineage != &metadata.lineage
+        || attested != lineage
+        || lineage.epoch != 1
+        || lineage.revision != 1
+        || lineage.devices.as_slice() != [device]
+        || device != vld0::public_key(&material.device)
+        || lineage.root != vld0::public_key(material.root()?)
+    {
+        return Err(Error::Unauthorized);
+    }
+    Ok(())
 }
 
 // Only this module can construct the root adapter. No caller callback receives
@@ -49,6 +55,29 @@ impl cdht::Signer for RootSigner<'_> {
             .map(|signature| *signature.value())
             .map_err(|_| cdht::Error::BadSignature)
     }
+}
+
+pub(in crate::keys) fn fixed_record(
+    root: &Secret,
+    lineage: &Lineage,
+    evidence: &[u8],
+    nonce: [u8; 24],
+) -> Result<(cdht::Descriptor, cdht::SignedValue), Error> {
+    let read = inspection::lineage_secret(root, lineage)?;
+    let ciphertext = crate::Vld0RecordCipher { secret: &read }.crypt(&nonce, evidence)?;
+    let signer = RootSigner(root);
+    let schema = cdht::Schema::dflt(1).map_err(|_| Error::Encoding)?;
+    let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|_| Error::Crypto)?;
+    let value = cdht::SignedValue::sign_with_nonce(
+        &descriptor.owner,
+        0,
+        0,
+        ciphertext.to_vec(),
+        Some(nonce),
+        &signer,
+    )
+    .map_err(|_| Error::Crypto)?;
+    Ok((descriptor, value))
 }
 
 impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
@@ -130,26 +159,16 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let mut nonce = [0; 24];
         self.entropy.fill(&mut nonce)?;
         let open = self.loaded()?;
-        let root = open.material.root()?;
-        let read = inspection::lineage_secret(root, &open.metadata.lineage)?;
-        let ciphertext =
-            crate::Vld0RecordCipher { secret: &read }.crypt(&nonce, canonical_evidence)?;
-        let signer = RootSigner(root);
-        let schema = cdht::Schema::dflt(1).map_err(|_| Error::Encoding)?;
-        let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|_| Error::Crypto)?;
-        let value = cdht::SignedValue::sign_with_nonce(
-            &descriptor.owner,
-            0,
-            0,
-            ciphertext.to_vec(),
-            Some(nonce),
-            &signer,
-        )
-        .map_err(|_| Error::Crypto)?;
+        let output = fixed_record(
+            open.material.root()?,
+            &open.metadata.lineage,
+            canonical_evidence,
+            nonce,
+        )?;
         if self.now()? >= expires {
             return Err(Error::Expired);
         }
-        Ok((descriptor, value))
+        Ok(output)
     }
 }
 

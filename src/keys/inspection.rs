@@ -1,7 +1,9 @@
 //! Original sealed checkpoint metadata, without granting authority or custody.
 use super::*;
 
+mod completion;
 mod lineage;
+pub use completion::{CompletionIntent, PendingCompletion, PendingCreation};
 pub(in crate::keys) use lineage::lineage_secret;
 pub use lineage::{LineageReadCustody, ProvisionalLineage};
 
@@ -139,7 +141,7 @@ impl CheckpointInspector {
         })
     }
 
-    fn decode(&self, sealed: &[u8]) -> Result<(Metadata, Material), Error> {
+    fn decode_retained(&self, sealed: &[u8]) -> Result<(Metadata, Material), Error> {
         if sealed.len() > MAX_CHECKPOINT_BYTES {
             return Err(Error::Limit);
         }
@@ -158,6 +160,11 @@ impl CheckpointInspector {
         if metadata.pairing.is_some() || material.root.is_none() {
             return Err(Error::NoRoot);
         }
+        Ok((metadata, material))
+    }
+
+    fn decode(&self, sealed: &[u8]) -> Result<(Metadata, Material), Error> {
+        let (metadata, material) = self.decode_retained(sealed)?;
         if metadata.output.is_some() {
             return Err(Error::Pending);
         }

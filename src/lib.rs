@@ -53,18 +53,19 @@ pub use error::Error;
 
 pub use keys::{
     Change, CheckpointBootstrap, CheckpointInspection, CheckpointInspector,
-    CheckpointRecordCustody, DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer,
-    KeyHandle, Keys, LineageReadCustody, OperationId, ProvisionalLineage, Receipt, RestoreRoot,
-    State, TransportSession, Vld0Signer, inspect_checkpoint,
+    CheckpointRecordCustody, CompletionIntent, DeviceAttestation, DeviceEd25519Signer, DeviceInfo,
+    Ed25519Signer, KeyHandle, Keys, LineageReadCustody, OperationId, PendingCompletion,
+    PendingCreation, ProvisionalLineage, Receipt, RestoreRoot, State, TransportSession, Vld0Signer,
+    inspect_checkpoint,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
 };
 pub use node_cipher::Vld0NodeCipher;
 pub use ports::{
-    Action, Authority, Authorization, Clock, Commit, DeviceSigning, Entropy, GenesisAuthorization,
-    Locator, MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES, NodePurpose, SecureStore,
-    SystemEntropy,
+    Action, Authority, Authorization, Clock, Commit, CompletionAuthorization, DeviceSigning,
+    Entropy, GenesisAuthorization, Locator, MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES,
+    NodePurpose, SecureStore, SystemEntropy,
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
 pub use record_cipher::{Vld0RecordCipher, Vld0RecordReader};

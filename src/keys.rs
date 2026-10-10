@@ -17,7 +17,8 @@ mod inspection;
 mod transport;
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
-    LineageReadCustody, ProvisionalLineage, inspect_checkpoint,
+    CompletionIntent, LineageReadCustody, PendingCompletion, PendingCreation, ProvisionalLineage,
+    inspect_checkpoint,
 };
 pub use transport::TransportSession;
 

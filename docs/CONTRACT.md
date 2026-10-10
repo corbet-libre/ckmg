@@ -307,3 +307,45 @@ checkpoint published. Crash continuation and production registration, current
 certificate/assertion, HTTPS and publication integration remain separate work.
 The new owner tests have not executed; no native/browser coverage or complete
 production genesis acceptance is claimed.
+
+## Pending creation completion
+
+`CheckpointInspector::pending_creation` authenticates only the original initial
+pending Created checkpoint: local revision one, signed epoch/revision one,
+sole original device, exact attested receipt and matching root material.
+Ordinary inspection and bootstrap still refuse Pending. This separate sealed
+owner never constructs Keys, restores a genesis marker or admits Create/Use.
+
+`authorize_completion` consumes that owner and freezes the complete durable
+Prepared intent: exact outer generation/digest, inner version/operation/digest,
+packed evidence, nonce, preparing clock floor and exclusive deadline. The
+dedicated authority must compare these inputs against its actual authenticated
+CVLT owner state and original certificate/assertion for the receipt's dedicated
+challenge, current signed policy and live membership. Both completion ports
+refuse by default; public intent fields are never accepting authority.
+
+Every reopen requires fresh dedicated completion authority from the original
+Foyer/Keyhole owner. Both completion checks return that genuine owner's checked
+time floor; CKMG refuses a local clock below it after admission and construction.
+The floor cannot come from a caller timestamp, cached policy or accepting boolean.
+Persisted preparing time does not remember later in-memory observations; a fresh
+original owner must establish freshness across restart. A consumed failed active
+attempt cannot revive, and renewed admission binds the same durable operation
+and immutable intent rather than ordinary restoration.
+
+Authorized completion lends only a borrowed original common-root StoreCipher.
+CVLT must check the actual initial inner Store and exact pending Keys entry
+before consuming `complete_genesis`. Its final synchronous authority check
+follows the last Store await and requires the same original current policy and
+retained session/device observation. No replacement evidence, nonce or deadline
+can be supplied at signing. Only fixed original CDHT DFLT(1), subkey-zero,
+sequence-zero outputs escape; the same authenticated intent yields identical
+bytes after reopening. Cancellation/refusal drops this attempt, and reopening
+cannot renew an expired intent or lower its persisted clock floor.
+
+The enclosing owner durably commits Prepared intent before signing and exact
+signed outputs before transport exposure. This bounded owner provides neither
+that outer transaction nor publication, forced current-lineage read, receipt
+acknowledgment or production completion authority. Original owner/crypto tests
+are written but unexecuted; complete crash recovery and native/browser production
+qualification remain unclaimed.

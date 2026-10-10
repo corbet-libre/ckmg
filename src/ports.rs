@@ -231,6 +231,30 @@ impl std::fmt::Debug for GenesisAuthorization<'_> {
     }
 }
 
+/// Exact original pending Created receipt and authenticated durable completion
+/// intent. The enclosing owner verifies original certificate/assertion proof
+/// for this receipt's dedicated challenge, current signed Policy and original
+/// live membership, plus every Store generation/digest and immutable intent
+/// field against its actual authenticated outer/inner owner state. Caller
+/// numbers, login assertions and cached accepting results are insufficient.
+pub struct CompletionAuthorization<'a> {
+    /// Exact pending Created receipt authenticated by the original Keys decoder.
+    pub receipt: &'a crate::Receipt,
+    /// Original fixed PRF-derived local Keys slot.
+    pub location: &'a Locator,
+    /// Digest of the exact original pending encrypted Keys entry.
+    pub sealed_digest: &'a [u8; 32],
+    /// All immutable inputs loaded from the actual durable Prepared intent.
+    pub intent: &'a crate::CompletionIntent,
+    /// Current Unix-second observation, checked around awaits and signing.
+    pub now: u64,
+}
+impl std::fmt::Debug for CompletionAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CompletionAuthorization([redacted])")
+    }
+}
+
 impl std::fmt::Debug for Authorization<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Authorization")
@@ -274,6 +298,32 @@ pub trait Authority {
     /// and exclusive deadlines. No cached boolean or synthetic lease suffices.
     /// This callback performs no I/O and must not retain borrowed request bytes.
     fn check_genesis_current(&mut self, _request: GenesisAuthorization<'_>) -> Result<(), Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Dedicated authenticated pending-creation completion only. Existing
+    /// authorities refuse; ordinary Create/Use/genesis ports never substitute.
+    /// Every reopen requires a new actual original Foyer/Keyhole owner check and
+    /// its checked time floor. Caller timestamps, cached policy or a verdict
+    /// remembered before restart cannot supply this observation.
+    fn check_completion(
+        &mut self,
+        _request: CompletionAuthorization<'_>,
+    ) -> impl Future<Output = Result<u64, Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// After the final Store await, synchronously compare the same original
+    /// authenticated Store/Prepared intent and reborrow current signed Policy
+    /// and actual original membership/session lease. No I/O, copied verdict,
+    /// fabricated observation or borrowed request retention is permitted.
+    /// Return the actual original Foyer/Keyhole owner's checked time floor,
+    /// including its retained monotonic observations. A caller timestamp or
+    /// cached policy verdict cannot supply this floor, including after reopen.
+    fn check_completion_current(
+        &mut self,
+        _request: CompletionAuthorization<'_>,
+    ) -> Result<u64, Error> {
         Err(Error::Unauthorized)
     }
 }
