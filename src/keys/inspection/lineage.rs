@@ -70,9 +70,12 @@ pub struct ProvisionalLineage<'attempt> {
     _attempt: std::marker::PhantomData<&'attempt [u8]>,
 }
 impl ProvisionalLineage<'_> {
+    /// Public owner of the fixed original lineage record; no member authority.
     pub fn owner(&self) -> PublicKey {
         self.custody.owner()
     }
+    /// Decrypt only that original lineage record under this borrowed attempt.
+    /// The cipher, root, Store custody and all publication keys remain private.
     pub fn open(&self, nonce: &[u8; 24], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
         self.custody.open(nonce, ciphertext)
     }
