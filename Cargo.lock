@@ -1191,7 +1191,7 @@ dependencies = [
 [[package]]
 name = "cdht"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cdht.git?branch=v01#8b8085a186fff0239f35cad517632be2ec1d06b7"
+source = "git+https://git.corbet.ch/corbet-foss/cdht.git?branch=v01#b3173c70644dacd8f5e9b1bd6478859fe03b4f03"
 dependencies = [
  "blake3",
  "capnp",
@@ -1603,7 +1603,7 @@ dependencies = [
 [[package]]
 name = "cpns"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpns?branch=main#b526789817e61b33fb685ba84e61854f94eb758c"
+source = "git+https://git.corbet.ch/corbet-foss/cpns?branch=main#6f6954b70b8d4e39d47c2a73325eabc6ee59fe7d"
 dependencies = [
  "getrandom 0.4.3",
  "sha2 0.11.0",
@@ -1614,7 +1614,7 @@ dependencies = [
 [[package]]
 name = "cpsd"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpsd?branch=main#e349e3bf67a8452567642f5fadbb5e9ccd339774"
+source = "git+https://git.corbet.ch/corbet-foss/cpsd?branch=main#260f7541f0bfcd4970214ade9516bb28d3d53873"
 dependencies = [
  "ark-bls12-381",
  "ark-ec 0.4.2",
@@ -1631,6 +1631,7 @@ dependencies = [
  "js-sys",
  "proof_system",
  "rand_chacha 0.3.1",
+ "schnorr_pok",
  "wasm-bindgen",
  "zeroize",
 ]
@@ -1992,12 +1993,14 @@ dependencies = [
 [[package]]
 name = "cwlt-engine"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cwlt?branch=main#7256ab82a54e5f7703f657f21c233c627131ef02"
+source = "git+https://git.corbet.ch/corbet-foss/cwlt?branch=main#ba404064e0772ef879b627354eea691d5e199d9d"
 dependencies = [
  "chacha20poly1305 0.11.0",
  "czkp",
  "ed25519-dalek 3.0.0",
  "getrandom 0.4.3",
+ "hpke",
+ "rs_merkle",
  "serde",
  "serde_json",
  "zeroize",
