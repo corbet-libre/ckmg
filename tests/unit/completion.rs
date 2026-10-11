@@ -43,13 +43,13 @@ impl Clock for Time {
     }
 }
 struct FinishingTime {
-    first: u64,
-    next: u64,
+    samples: [u64; 3],
+    next: usize,
 }
 impl Clock for FinishingTime {
     fn now(&mut self) -> Result<u64, Error> {
-        let now = self.first;
-        self.first = self.next;
+        let now = self.samples[self.next.min(self.samples.len() - 1)];
+        self.next += 1;
         Ok(now)
     }
 }
@@ -135,6 +135,7 @@ struct CompletionOwner {
     observed: Time,
     mode: Rc<Cell<u8>>,
     final_checks: usize,
+    credential: Vec<u8>,
 }
 impl CompletionOwner {
     fn new(pending: &PendingCreation, time: Time) -> Self {
@@ -147,13 +148,14 @@ impl CompletionOwner {
             observed: Time(Rc::new(Cell::new(1000))),
             mode: Rc::new(Cell::new(0)),
             final_checks: 0,
+            credential: b"credential".to_vec(),
         }
     }
     fn exact(&self, request: &crate::CompletionAuthorization<'_>) -> Result<(), Error> {
         let actual = request.intent;
         let expected = &self.expected;
         if request.receipt != &self.receipt
-            || request.authority_reference != b"credential"
+            || request.authority_reference != self.credential.as_slice()
             || request.location != &self.location
             || request.sealed_digest != &self.sealed_digest
             || actual.outer_generation != expected.outer_generation
@@ -623,8 +625,8 @@ shared!(
                 .await
                 .unwrap();
             let mut ending = FinishingTime {
-                first: 1000,
-                next: final_time,
+                samples: [1000, 1000, final_time],
+                next: 0,
             };
             let error = admitted
                 .complete_genesis(&mut ending, &mut owner)
@@ -715,5 +717,178 @@ shared!(
             Error::Unauthorized
         );
         assert_eq!(owner.final_checks, 0);
+    }
+);
+
+shared!(
+    initial_reader_opens_only_the_original_signed_record_without_borrowing_completion,
+    {
+        let (mut keys, prf, sealed, mut time) = fixture().await;
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let reader = completion.lineage_reader().unwrap();
+        assert_eq!(format!("{reader:?}"), "InitialLineageReader([redacted])");
+        let (descriptor, value) = completion.complete_genesis(&mut time, &mut owner).unwrap();
+        assert_eq!(reader.owner().value(), &descriptor.owner);
+        let schema = descriptor.validate(&Verify).unwrap();
+        assert_eq!(schema, cdht::Schema::dflt(1).unwrap());
+        value
+            .validate(&descriptor.key(), &descriptor.owner, &schema, 0, &Verify)
+            .unwrap();
+        assert_eq!(
+            &*reader.open(&value.nonce.unwrap(), &value.data).unwrap(),
+            PAYLOAD
+        );
+        // This reader is not a current writer or member grant. The original
+        // Keys owner still has its unchanged pending output and denies Use.
+        let original_receipt = keys.pending_output().await.unwrap().unwrap();
+        assert_eq!(original_receipt, owner.receipt);
+        drop(reader);
+        assert_eq!(
+            keys.pending_output().await.unwrap().unwrap(),
+            original_receipt
+        );
+        assert_eq!(keys.store.0.borrow().get(&owner.location).unwrap(), &sealed);
+        assert_eq!(keys.lineage().await.unwrap_err(), Error::Unauthorized);
+        assert_eq!(keys.authority.calls.get(), 2);
+    }
+);
+
+shared!(
+    current_completion_check_keeps_latest_floor_and_refusal_is_terminal,
+    {
+        let (_, prf, sealed, mut time) = fixture().await;
+        for failure in 0..5 {
+            time.0.set(1000);
+            let pending = CheckpointInspector::new(&prf, COMMUNITY)
+                .unwrap()
+                .pending_creation(&sealed)
+                .unwrap();
+            let mut owner = CompletionOwner::new(&pending, time.clone());
+            let mut completion = pending
+                .authorize_completion(intent(), &mut time, &mut owner)
+                .await
+                .unwrap();
+            time.0.set(1020);
+            assert_eq!(
+                completion.check_current(&mut time, &mut owner).unwrap(),
+                1020
+            );
+            assert_eq!(owner.final_checks, 1);
+            let expected = match failure {
+                0 => {
+                    time.0.set(1010);
+                    Error::Clock
+                }
+                1 => {
+                    time.0.set(1060);
+                    Error::Expired
+                }
+                2 => {
+                    owner.observed.0.set(1021);
+                    Error::Clock
+                }
+                3 => {
+                    owner.mode.set(4);
+                    Error::Unauthorized
+                }
+                4 => {
+                    owner.credential = b"other credential".to_vec();
+                    Error::Unauthorized
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                completion.check_current(&mut time, &mut owner).unwrap_err(),
+                expected
+            );
+            assert_eq!(
+                completion.lineage_reader().unwrap_err(),
+                Error::Unauthorized
+            );
+            let checks = owner.final_checks;
+            time.0.set(1030);
+            owner.mode.set(0);
+            owner.observed.0.set(1000);
+            owner.credential = b"credential".to_vec();
+            assert_eq!(
+                completion.check_current(&mut time, &mut owner),
+                Err(Error::Unauthorized)
+            );
+            assert_eq!(owner.final_checks, checks);
+            assert_eq!(
+                completion
+                    .complete_genesis(&mut time, &mut owner)
+                    .unwrap_err(),
+                Error::Unauthorized
+            );
+        }
+    }
+);
+
+shared!(
+    current_check_samples_after_owner_and_genesis_samples_after_crypto,
+    {
+        let (_, prf, sealed, mut time) = fixture().await;
+        for completed in [999, 1060] {
+            time.0.set(1000);
+            let pending = CheckpointInspector::new(&prf, COMMUNITY)
+                .unwrap()
+                .pending_creation(&sealed)
+                .unwrap();
+            let mut owner = CompletionOwner::new(&pending, time.clone());
+            let mut completion = pending
+                .authorize_completion(intent(), &mut time, &mut owner)
+                .await
+                .unwrap();
+            let mut ending = FinishingTime {
+                samples: [1000, completed, completed],
+                next: 0,
+            };
+            assert_eq!(
+                completion
+                    .check_current(&mut ending, &mut owner)
+                    .unwrap_err(),
+                if completed == 999 {
+                    Error::Clock
+                } else {
+                    Error::Expired
+                }
+            );
+            assert_eq!(
+                completion.check_current(&mut time, &mut owner),
+                Err(Error::Unauthorized)
+            );
+            assert_eq!(owner.final_checks, 1);
+        }
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        // Signing starts after a successful completion observation at 1020;
+        // rolling back to 1010 still after original 1000 must not release bytes.
+        let mut ending = FinishingTime {
+            samples: [1000, 1020, 1010],
+            next: 0,
+        };
+        assert_eq!(
+            completion
+                .complete_genesis(&mut ending, &mut owner)
+                .unwrap_err(),
+            Error::Clock
+        );
+        assert_eq!(owner.final_checks, 1);
     }
 );

@@ -121,7 +121,7 @@ impl PendingCreation {
             source: self,
             intent,
             cipher,
-            checked_at,
+            checked_at: Some(checked_at),
         })
     }
 }
@@ -134,7 +134,7 @@ pub struct PendingCompletion {
     source: PendingCreation,
     intent: CompletionIntent,
     cipher: passkey::StoreCipher,
-    checked_at: u64,
+    checked_at: Option<u64>,
 }
 redacted!(PendingCompletion);
 
@@ -157,18 +157,27 @@ impl PendingCompletion {
         &self.cipher
     }
 
-    /// Consume this owner after the final authenticated Store await. No new
-    /// evidence, nonce or deadline can be supplied here. The dedicated sync
-    /// authority must reborrow original current policy, validate its actual
-    /// retained membership/session lease and compare the same durable intent.
-    /// Signed outputs must be durably recorded before any transport exposure.
-    pub fn complete_genesis(
-        self,
+    /// Retain only the original initial lineage read key after the dedicated
+    /// completion admission. The owned reader does not borrow this root owner.
+    /// The enclosing attempt must own and drop it on refusal or disposal; it
+    /// grants no ordinary Keys Use or publication acknowledgement.
+    pub fn lineage_reader(&self) -> Result<InitialLineageReader, Error> {
+        self.checked_at.ok_or(Error::Unauthorized)?;
+        let (lineage, _) = self.source.receipt.attested_lineage()?;
+        super::lineage::initial_reader(&self.source.root, lineage)
+    }
+
+    /// Recheck only this exact dedicated completion after an enclosing await.
+    /// Refusal consumes the monotonic check state; no later call can revive it.
+    /// This does not authorize ordinary Keys Use or acknowledge publication.
+    pub fn check_current(
+        &mut self,
         clock: &mut impl Clock,
         authority: &mut impl Authority,
-    ) -> Result<(cdht::Descriptor, cdht::SignedValue), Error> {
+    ) -> Result<u64, Error> {
+        let floor = self.checked_at.take().ok_or(Error::Unauthorized)?;
         let now = clock.now()?;
-        check_time(now, self.checked_at, self.intent.expires)?;
+        check_time(now, floor, self.intent.expires)?;
         let owner_floor = authority
             .check_completion_current(crate::CompletionAuthorization {
                 receipt: &self.source.receipt,
@@ -179,6 +188,23 @@ impl PendingCompletion {
                 now,
             })
             .map_err(authority_error)?;
+        let completed = clock.now()?;
+        check_time(completed, now.max(owner_floor), self.intent.expires)?;
+        self.checked_at = Some(completed);
+        Ok(completed)
+    }
+
+    /// Consume this owner after the final authenticated Store await. No new
+    /// evidence, nonce or deadline can be supplied here. The dedicated sync
+    /// authority must reborrow original current policy, validate its actual
+    /// retained membership/session lease and compare the same durable intent.
+    /// Signed outputs must be durably recorded before any transport exposure.
+    pub fn complete_genesis(
+        mut self,
+        clock: &mut impl Clock,
+        authority: &mut impl Authority,
+    ) -> Result<(cdht::Descriptor, cdht::SignedValue), Error> {
+        let checked_at = self.check_current(clock, authority)?;
         let (lineage, _) = self.source.receipt.attested_lineage()?;
         let outputs = super::super::genesis::fixed_record(
             &self.source.root,
@@ -186,7 +212,7 @@ impl PendingCompletion {
             &self.intent.packed_evidence,
             self.intent.nonce,
         )?;
-        check_time(clock.now()?, now.max(owner_floor), self.intent.expires)?;
+        check_time(clock.now()?, checked_at, self.intent.expires)?;
         Ok(outputs)
     }
 }

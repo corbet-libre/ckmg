@@ -5,7 +5,7 @@ mod completion;
 mod lineage;
 pub use completion::{CompletionIntent, PendingCompletion, PendingCreation};
 pub(in crate::keys) use lineage::lineage_secret;
-pub use lineage::{LineageReadCustody, ProvisionalLineage};
+pub use lineage::{InitialLineageReader, LineageReadCustody, ProvisionalLineage};
 
 #[cfg(test)]
 #[path = "../../tests/unit/checkpoint_inspection.rs"]

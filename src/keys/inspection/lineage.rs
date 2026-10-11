@@ -25,6 +25,37 @@ impl LineageReadCustody {
 }
 redacted!(LineageReadCustody);
 
+/// Fixed initial lineage read custody for one enclosing completion attempt.
+/// Only the original purpose-separated read key is retained. This grants no
+/// writer, root, Store access, ordinary Keys Use or acknowledgement. The
+/// enclosing attempt must own and drop this capability on refusal or disposal;
+/// dropping a separate completion owner does not revoke an independent reader.
+pub struct InitialLineageReader {
+    custody: LineageReadCustody,
+}
+impl InitialLineageReader {
+    /// Exact original initial root public key for its fixed DFLT(1) record.
+    pub fn owner(&self) -> PublicKey {
+        self.custody.owner()
+    }
+    /// Open only after the adapter verifies the original signed descriptor,
+    /// nonce and value under this fixed owner and fresh forced read agreement.
+    /// This decryption is not an authentication or current-authority verdict.
+    pub fn open(&self, nonce: &[u8; 24], ciphertext: &[u8]) -> Result<Zeroizing<Vec<u8>>, Error> {
+        self.custody.open(nonce, ciphertext)
+    }
+}
+redacted!(InitialLineageReader);
+
+pub(super) fn initial_reader(
+    root: &Secret,
+    lineage: &Lineage,
+) -> Result<InitialLineageReader, Error> {
+    Ok(InitialLineageReader {
+        custody: lineage_reader(root, lineage)?,
+    })
+}
+
 /// Provisional reader borrowing the exact retained checkpoint for one restore
 /// attempt. It cannot open the Store, sign, publish or become member custody.
 /// Drop it before completing restore; never retain it as member authority.
