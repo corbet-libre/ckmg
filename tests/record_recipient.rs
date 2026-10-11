@@ -14,11 +14,13 @@ use support::*;
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
+type CheckedRecipient = (Binding, PublicKey, PublicKey, u64);
+
 #[derive(Clone)]
 struct Current {
     guard: Guard,
     owner_clock: Time,
-    checked: Rc<RefCell<Option<(Binding, PublicKey, PublicKey, u64)>>>,
+    checked: Rc<RefCell<Option<CheckedRecipient>>>,
 }
 impl Authority for Current {
     async fn check(&mut self, request: Authorization<'_>) -> Result<(), Error> {
