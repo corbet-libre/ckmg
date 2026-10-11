@@ -436,6 +436,28 @@ impl KeyCertificate {
         }
         vld0::verify(&self.device, &self.signed_bytes()?, &self.signature)
     }
+
+    /// Verify only the original device-certified data against independently
+    /// authenticated peer binding, purpose and device expectations.
+    ///
+    /// This establishes neither current lineage nor epoch freshness, enrollment,
+    /// membership or revocation status. Those remain the authenticated peer
+    /// owner's responsibility; no custody or authorization capability is returned.
+    pub fn verify_device_certificate(
+        &self,
+        expected_binding: &Binding,
+        expected_purpose: &Purpose,
+        expected_device: &PublicKey,
+    ) -> Result<(), Error> {
+        if self.binding != *expected_binding
+            || self.purpose != *expected_purpose
+            || self.device != *expected_device
+            || self.epoch == 0
+        {
+            return Err(Error::Unauthorized);
+        }
+        vld0::verify(expected_device, &self.signed_bytes()?, &self.signature)
+    }
 }
 
 pub(crate) fn encode<T: Serialize>(domain: &[u8], value: &T) -> Result<Vec<u8>, Error> {
