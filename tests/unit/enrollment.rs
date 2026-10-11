@@ -476,7 +476,7 @@ shared!(
                     material.identity = material.root.clone();
                 }
                 2 => material.identity = Some(Zeroizing::new([77; 32])),
-                3 => material.history.push((0, Zeroizing::new([78; 32]))),
+                3 => material.history.push((1, Zeroizing::new([78; 32]))),
                 _ => unreachable!(),
             }
             // Keep both actual upstream signatures valid for the modified private
