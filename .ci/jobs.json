@@ -2,8 +2,20 @@
   "schema": 1,
   "generator": "ccid render v1",
   "tool_revision": "53c129c2efa3b9279d2ecbc237d15acdfb656d8c",
-  "manifest_sha256": "9ede57f43b3393a9cd3276ad494aed86045634d95459b2209a404519075eb4b6",
+  "manifest_sha256": "2a78b9298ae1e91457c59e45c76ddb8276c6fdf5d05f8604020152d6ba520a6b",
   "jobs": {
+    "native": {
+      "job": "native",
+      "scheduler": "crow",
+      "checks": [
+        "native"
+      ],
+      "workflow": "repository-jobs",
+      "command": [
+        "bash",
+        ".ci/run-cached.sh"
+      ]
+    },
     "resolve-dependencies": {
       "job": "resolve-dependencies",
       "scheduler": "crow",
