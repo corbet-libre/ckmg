@@ -262,6 +262,50 @@ impl std::fmt::Debug for CompletionAuthorization<'_> {
     }
 }
 
+/// Actual durable outer checkpoint holding the original unenrolled ciphertext.
+/// These numbers are not authority; the composer checks its original Store.
+pub struct InitialActivationIntent {
+    /// Exact authenticated outer generation, never a missing-cache observation.
+    pub generation: u64,
+    /// Digest of the actual durable encrypted outer checkpoint.
+    pub digest: [u8; 32],
+}
+impl std::fmt::Debug for InitialActivationIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InitialActivationIntent([redacted])")
+    }
+}
+
+/// Dedicated activation of one pre-registration durable private candidate.
+/// Require the actual current same-key initial-enrollment owner, its immutable
+/// accepted seed, current member/device/Policy and exact durable candidate.
+/// Ordinary certificates, login data and serialized claims never suffice.
+pub struct InitialActivationAuthorization<'a> {
+    /// Original fixed community and externally verified pseudonym.
+    pub binding: &'a Binding,
+    /// Original PRF-derived device which the current membership must authorize.
+    pub device: PublicKey,
+    /// Exact original CPky credential ID, retained inside this candidate.
+    pub authority_reference: &'a [u8],
+    /// Opaque commitment generated before the original registration challenge.
+    pub seed: &'a [u8; 32],
+    /// Original fixed operation; this is not a committed public receipt.
+    pub operation: crate::OperationId,
+    /// Original community-scoped passkey locator.
+    pub location: &'a Locator,
+    /// Exact authenticated revision-zero candidate ciphertext digest.
+    pub sealed_digest: &'a [u8; 32],
+    /// Original durable owner checkpoint, checked against the real Store.
+    pub durable: &'a InitialActivationIntent,
+    /// Current monotonic checked local sample.
+    pub now: u64,
+}
+impl std::fmt::Debug for InitialActivationAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InitialActivationAuthorization([redacted])")
+    }
+}
+
 impl std::fmt::Debug for Authorization<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Authorization")
@@ -287,6 +331,24 @@ impl std::fmt::Debug for Authorization<'_> {
 /// Recheck authority deadlines after waits. Refuse if current authority
 /// cannot be established. No permissive implementation ships with this library.
 pub trait Authority {
+    /// Consume a fresh original same-key enrollment observation for this exact
+    /// retained candidate. Return its genuine checked server/owner clock floor.
+    /// Existing Create/Use/certificate ports cannot activate a candidate.
+    fn check_initial_activation(
+        &mut self,
+        _request: InitialActivationAuthorization<'_>,
+    ) -> impl Future<Output = Result<u64, Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// Reborrow the same actual live owner and current Policy after the final
+    /// storage await. No I/O, caller timestamp or cached accepting verdict.
+    fn check_initial_activation_current(
+        &mut self,
+        _request: InitialActivationAuthorization<'_>,
+    ) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
     /// Authorize this exact request or refuse with a coarse error.
     fn check(&mut self, request: Authorization<'_>) -> impl Future<Output = Result<(), Error>>;
 

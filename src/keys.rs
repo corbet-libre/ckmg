@@ -12,9 +12,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+mod enrollment;
 mod genesis;
 mod inspection;
 mod transport;
+pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
     CompletionIntent, InitialLineageReader, LineageReadCustody, PendingCompletion, PendingCreation,
@@ -962,6 +964,14 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             }
             None => None,
         };
+        self.prepare_checkpoint(candidate, expected)
+    }
+
+    fn prepare_checkpoint(
+        &mut self,
+        mut candidate: Open,
+        expected: Option<[u8; 32]>,
+    ) -> Result<(), Error> {
         validate_checkpoint(&candidate.metadata, &candidate.material)?;
         let plaintext = encode_checkpoint(&candidate.metadata, &candidate.material)?;
         let mut sealed = CHECKPOINT_HEADER.to_vec();

@@ -63,6 +63,9 @@ impl CheckpointInspector {
 }
 
 impl PendingCreation {
+    pub(in crate::keys) fn original_reference(&self) -> &[u8] {
+        &self.authority_reference
+    }
     /// Exact original pending receipt; no certificate or currentness inferred.
     pub fn receipt(&self) -> &Receipt {
         &self.receipt
