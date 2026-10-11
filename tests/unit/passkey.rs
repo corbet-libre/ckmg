@@ -1,5 +1,26 @@
 use super::*;
 
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_recipient_label_has_an_independent_standard_hkdf_vector() {
+    let hex = |bytes: &[u8]| data_encoding::HEXLOWER.encode(bytes);
+    let common = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let recipient = expand(&common, b"ckmg.record-witness-recipient.v1\0", "a").unwrap();
+    // Independently evaluated by Node's OpenSSL-backed crypto.hkdfSync.
+    assert_eq!(
+        hex(recipient.as_slice()),
+        "29207e2943ad50807f652582fa72529d910ffc82a6db9b7d6bb5cd08c290f198"
+    );
+    let roots = identity_roots(&common, "a").unwrap();
+    assert_ne!(recipient, roots.balance_seed);
+    assert_ne!(recipient, roots.balance_sealing_key);
+    assert_ne!(recipient, device_seed(&common, "a").unwrap());
+    assert_ne!(
+        recipient,
+        expand(&common, b"ckmg.record-witness-recipient.v1\0", "b").unwrap()
+    );
+}
+
 const LINEAGE_INFO: &[u8] = b"ckmg.member-lineage-seed.v1\0";
 
 fn lineage_seed(prf: &PrfOutput, community: &str) -> Result<Secret, Error> {

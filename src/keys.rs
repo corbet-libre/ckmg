@@ -1897,6 +1897,76 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .await?
     }
 
+    /// Lend the dedicated common-root record recipient after fresh normal Use.
+    /// Scope comes from this loaded original Binding, never a caller domain.
+    /// Fetch the whole bounded object first, then freshly authenticate its Epoch
+    /// and invoke this synchronous callback. Transport opening is not account
+    /// initialization or proof authority; no recipient can survive an await.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>) {
+    /// let retained = keys.with_record_recipient(|recipient| recipient).await;
+    /// # }
+    /// ```
+    #[cfg(feature = "wallet-engine")]
+    pub async fn with_record_recipient<T>(
+        &mut self,
+        consume: impl for<'key> FnOnce(crate::wallet_engine::RecordRecipient<'key>) -> T,
+    ) -> Result<T, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        self.refresh().await?;
+        let now = self.now()?;
+        let current = self.loaded()?;
+        let binding = current.metadata.lineage.binding.clone();
+        let root = current.metadata.lineage.root;
+        let epoch = current.metadata.lineage.epoch;
+        let device = vld0::public_key(&current.material.device);
+        let floor = match self
+            .authority
+            .check_record_recipient_current(Authorization {
+                binding: &binding,
+                root: Some(root),
+                device,
+                epoch,
+                action: Action::Use,
+                target: None,
+                statement: None,
+                signing: None,
+                now,
+                evidence: &[],
+            }) {
+            Ok(floor) => floor,
+            Err(error) => {
+                self.fail_closed(if error == Error::Revoked {
+                    State::Revoked
+                } else {
+                    State::Locked
+                });
+                return Err(error);
+            }
+        };
+        let completed = self.now()?;
+        if completed < floor {
+            self.fail_closed(State::Locked);
+            return Err(Error::Clock);
+        }
+        let current = self.loaded()?;
+        let common = current
+            .material
+            .identity
+            .as_ref()
+            .ok_or(Error::MissingCheckpoint)?;
+        passkey::with_record_recipient(
+            common,
+            current.metadata.lineage.binding.community(),
+            completed,
+            consume,
+        )
+    }
+
     /// Restore only the engine's authenticated original ciphertext inside fresh
     /// Keys custody. Wallet must still reconcile its original Store and accepted
     /// state; successful sealing/opening alone grants no release authority.

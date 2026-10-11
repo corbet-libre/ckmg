@@ -363,6 +363,19 @@ pub trait Authority {
         Err(Error::Unauthorized)
     }
 
+    /// Reborrow the same original live owner for the dedicated record recipient
+    /// after the final checkpoint await. Require the exact already-checked Use
+    /// binding/root/device/epoch, no target/statement/signing/evidence, fresh
+    /// current Charter/device authority, exclusive owner deadlines and clock.
+    /// Return the actual owner's checked floor, never a caller timestamp or a
+    /// cached accepting result. No I/O is allowed at this point of use.
+    fn check_record_recipient_current(
+        &mut self,
+        _request: Authorization<'_>,
+    ) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
     /// Dedicated, one-attempt certified genesis admission. Existing authorities
     /// refuse by default; Create, transport use or normal Use cannot substitute.
     fn check_genesis(

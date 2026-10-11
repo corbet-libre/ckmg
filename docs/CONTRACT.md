@@ -361,3 +361,22 @@ that outer transaction nor publication, forced current-lineage read, receipt
 acknowledgment or production completion authority. Original owner/crypto tests
 are written but unexecuted; complete crash recovery and native/browser production
 qualification remain unclaimed.
+
+With `wallet-engine`, `with_record_recipient` lends only the dedicated
+common-root-derived recipient for the loaded community. The existing private
+HKDF uses a separate `ckmg.record-witness-recipient.v1` label plus NUL and the
+exact Binding community ID; the public community coordinate follows original
+AccountLedger SHA-256 encoding. Standard HPKE derives the key pair inside the
+opaque Wallet owner. Every equal passkey holding that common root derives the
+same recipient; device/root-epoch changes do not silently rotate enrollment.
+
+Fresh normal Use is followed by exact checkpoint and clock checks and the
+default-refusing synchronous `check_record_recipient_current` port. That port
+must reborrow the same original retained owner and current signed Charter/device
+authority, then return its actual checked floor. Caller timestamps, cached
+acceptance and constructor inputs grant no authority. The borrowed recipient
+cannot escape the synchronous callback; only its public coordinate and an opaque
+RAM transport packet can leave it. An authenticated current Epoch and genuine
+admitted account owner must be supplied separately before opening. This does not
+initialize an account, export an opening or provide a proving adapter. No
+accepting production adapter or executed qualification is claimed in this stage.

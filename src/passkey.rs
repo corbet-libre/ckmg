@@ -149,6 +149,27 @@ pub(crate) fn profile_storage_key(common: &Secret, community: &str) -> Result<Se
     )
 }
 
+/// Dedicated immutable common-root recipient; never reuse balance or device keys.
+#[cfg(feature = "wallet-engine")]
+pub(crate) fn with_record_recipient<T>(
+    common: &Secret,
+    community: &str,
+    checked_at: u64,
+    consume: impl for<'key> FnOnce(cwlt_engine::RecordRecipient<'key>) -> T,
+) -> Result<T, Error> {
+    use sha2::Digest;
+    let mut seed = expand(
+        &PrfOutput(common.clone()),
+        b"ckmg.record-witness-recipient.v1\0",
+        community,
+    )?;
+    // Original AccountLedger uses SHA-256 of its authenticated community ID.
+    let coordinate = Sha256::digest(community.as_bytes()).into();
+    let recipient = cwlt_engine::RecordRecipient::from_seed(&mut seed, coordinate, checked_at)
+        .map_err(|_| Error::Encoding)?;
+    Ok(consume(recipient))
+}
+
 /// One-use holder-seed capability borrowed from freshly authorized Keys.
 /// No byte/RNG getter, callback, Clone, Debug or serialization is implemented.
 /// Wallet consumes it to initialize the maintained Pseudonyms engine; the engine

@@ -25,6 +25,7 @@ enters these derivations.
 | Passport holder secret seed | `ckmg.passport-holder-seed.v1\0` |
 | Logical device Ed25519 seed | `ckmg.device-lineage-seed.v1\0` |
 | Historical lineage vector only (no production derivation) | `ckmg.member-lineage-seed.v1\0` |
+| Common record-witness HPKE recipient input | `ckmg.record-witness-recipient.v1\0` |
 
 A common identity root and each replacement epoch root come directly from injected
 CSPRNG entropy through upstream `getrandom`. Every passkey retains the same common
