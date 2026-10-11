@@ -13,6 +13,8 @@ cargo metadata --locked --format-version 1 > dependency-metadata.json
 cargo fmt --all -- --check
 cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
+cargo clippy --locked --features wallet-engine --test record_recipient -- -D warnings
+cargo test --locked --features wallet-engine --test record_recipient
 cargo clippy --locked --lib --target wasm32-unknown-unknown -- -D warnings
 
 version=$(jq -r '.packages[] | select(.name == "wasm-bindgen") | .version' dependency-metadata.json)
