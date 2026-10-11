@@ -31,6 +31,7 @@ fn fixture() -> (PrfOutput, Metadata, Material) {
         pairing: None,
         revoked: false,
         output: None,
+        initial: None,
     };
     (prf, metadata, material)
 }

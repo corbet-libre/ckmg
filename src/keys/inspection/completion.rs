@@ -31,11 +31,11 @@ redacted!(CompletionIntent);
 /// Keys owner, operation, signer, cipher accessor, cloning or serialization.
 /// Only dedicated current completion authorization can expose bounded custody.
 pub struct PendingCreation {
-    root: Secret,
-    receipt: Receipt,
-    authority_reference: Vec<u8>,
-    location: Locator,
-    sealed_digest: [u8; 32],
+    pub(super) root: Secret,
+    pub(super) receipt: Receipt,
+    pub(super) authority_reference: Vec<u8>,
+    pub(super) location: Locator,
+    pub(super) sealed_digest: [u8; 32],
     last_time: u64,
 }
 redacted!(PendingCreation);
@@ -134,10 +134,10 @@ impl PendingCreation {
 /// while retaining its actual Store lock before consuming the signing boundary.
 /// No general Keys/Wallet owner or arbitrary root signer escapes.
 pub struct PendingCompletion {
-    source: PendingCreation,
-    intent: CompletionIntent,
+    pub(super) source: PendingCreation,
+    pub(super) intent: CompletionIntent,
     cipher: passkey::StoreCipher,
-    checked_at: Option<u64>,
+    pub(super) checked_at: Option<u64>,
 }
 redacted!(PendingCompletion);
 

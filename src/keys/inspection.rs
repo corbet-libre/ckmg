@@ -2,6 +2,9 @@
 use super::*;
 
 mod completion;
+mod initial_ack;
+pub use initial_ack::InitialCheckpointProvenance;
+pub(in crate::keys) use initial_ack::StoredInitial;
 mod lineage;
 mod publication;
 pub use completion::{CompletionIntent, PendingCompletion, PendingCreation};

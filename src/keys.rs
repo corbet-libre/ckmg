@@ -19,8 +19,8 @@ mod transport;
 pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
-    CompletionIntent, InitialLineageReader, LineageReadCustody, PendingCompletion, PendingCreation,
-    ProvisionalLineage, inspect_checkpoint,
+    CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCustody,
+    PendingCompletion, PendingCreation, ProvisionalLineage, inspect_checkpoint,
 };
 pub use transport::TransportSession;
 
@@ -308,6 +308,8 @@ struct Metadata {
     pairing: Option<PairingRequest>,
     revoked: bool,
     output: Option<Receipt>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    initial: Option<inspection::StoredInitial>,
 }
 
 #[derive(Clone)]
@@ -931,6 +933,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 pairing,
                 revoked: false,
                 output: None,
+                initial: None,
             },
         })
     }
@@ -941,6 +944,12 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         expected: Option<[u8; 32]>,
         change: Option<Change>,
     ) -> Result<(), Error> {
+        // Initial provenance authenticates only the exact original ACK. Later
+        // mutations cannot carry it as approval for a new lineage or operation.
+        if candidate.metadata.revision >= 2 || change.is_some() {
+            candidate.metadata.initial = None;
+            candidate.metadata.version = 1;
+        }
         candidate.metadata.revision = candidate
             .metadata
             .revision
@@ -1120,6 +1129,38 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let expected = candidate.stamp;
         self.prepare(candidate, Some(expected), None)?;
         self.commit().await?;
+        Ok(())
+    }
+
+    /// Acknowledge only the exact original pending Created operation admitted
+    /// by its sealed completion owner. Public intent arguments cannot substitute.
+    /// The original SecureStore CAS commits provenance and cleared output together.
+    pub async fn acknowledge_initial(
+        &mut self,
+        completion: &mut PendingCompletion,
+    ) -> Result<(), Error> {
+        self.refresh().await?;
+        completion.check_current(&mut self.clock, &mut self.authority)?;
+        let now = self.now()?;
+        let mut candidate = self.loaded()?.clone();
+        let initial = completion.bind_acknowledgment(&candidate, now)?;
+        let completion = completion.acknowledgment_guard();
+        candidate.metadata.initial = Some(initial);
+        candidate.metadata.version = 2;
+        candidate.metadata.output = None;
+        let expected = candidate.stamp;
+        self.prepare(candidate, Some(expected), None)?;
+        self.commit().await?;
+        // A successful backend CAS may have crossed the original deadline or
+        // lost the live key lease. Keep the durable winner, but no live owner
+        // survives an uncertain post-write authority outcome.
+        match completion.finish(&mut self.clock, &mut self.authority, self.last_time) {
+            Ok(completed) => self.last_time = completed,
+            _ => {
+                self.fail_closed(State::Reconcile);
+                return Err(Error::Reconcile);
+            }
+        }
         Ok(())
     }
 
@@ -2191,10 +2232,14 @@ fn decode_checkpoint(bytes: &[u8]) -> Result<(Metadata, Material), Error> {
 }
 
 fn validate_checkpoint(metadata: &Metadata, material: &Material) -> Result<(), Error> {
-    if metadata.version != 1 || metadata.revision == 0 {
+    if metadata.revision == 0 || metadata.version != if metadata.initial.is_some() { 2 } else { 1 }
+    {
         return Err(Error::Encoding);
     }
     metadata.lineage.verify()?;
+    if let Some(initial) = &metadata.initial {
+        initial.validate(metadata, material)?;
+    }
     if material
         .history
         .iter()

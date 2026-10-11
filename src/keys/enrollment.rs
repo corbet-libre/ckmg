@@ -82,6 +82,7 @@ impl EnrollmentSeed {
             pairing: None,
             revoked: false,
             output: Some(receipt),
+            initial: None,
         };
         validate_unenrolled(&metadata, &material)?;
         let plaintext = encode_checkpoint(&metadata, &material)?;
@@ -169,7 +170,11 @@ impl UnenrolledCreation {
     }
 }
 
-fn commitment(binding: &Binding, root: &Secret, operation: OperationId) -> Result<[u8; 32], Error> {
+pub(super) fn commitment(
+    binding: &Binding,
+    root: &Secret,
+    operation: OperationId,
+) -> Result<[u8; 32], Error> {
     // Reuse maintained BLAKE3 and the original canonical public encoding. The
     // private root is fed directly, avoiding an unzeroized serialized key copy.
     let public = encode(b"ckmg.initial-enrollment.v1\0", &(binding, operation))?;
