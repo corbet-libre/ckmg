@@ -378,6 +378,32 @@ pub trait Authority {
         Err(Error::Unauthorized)
     }
 
+    /// Dedicated current-device entry. The original action and transcript stay
+    /// unchanged; this only lets an owner retain its genuine local lease until
+    /// the existing final synchronous hook. It grants nothing by default beyond
+    /// the original asynchronous check; the final hook still refuses by default.
+    fn check_device_signing(
+        &mut self,
+        request: Authorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        self.check(request)
+    }
+
+    /// Dedicated record-recipient entry, retaining the original Use request.
+    /// Current-owner implementations can distinguish this bounded loan from
+    /// ordinary Use. The existing final synchronous hook remains mandatory.
+    fn check_record_recipient(
+        &mut self,
+        request: Authorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        self.check(request)
+    }
+
+    /// Drop an unfinished current-owner attempt and release its local guards.
+    /// This negative-only cleanup performs no I/O and can grant no authority.
+    /// Keys invokes it on every scoped current-operation exit, including cancel.
+    fn discard_current_attempt(&mut self) {}
+
     /// Final synchronous check for an exact device transcript after the last
     /// Store await. The original asynchronous check must have consumed distinct
     /// one-use intent for these same bytes and exclusive deadline. Reborrow the

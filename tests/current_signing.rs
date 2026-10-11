@@ -2,8 +2,12 @@
 //! not production HTTPS or Charter qualification.
 mod support;
 use ckmg::*;
-use futures::{FutureExt, executor::block_on};
-use std::{cell::Cell, rc::Rc};
+use futures::{
+    FutureExt,
+    executor::block_on,
+    lock::{Mutex, OwnedMutexGuard},
+};
+use std::{cell::Cell, rc::Rc, sync::Arc};
 use support::*;
 
 #[cfg(target_arch = "wasm32")]
@@ -18,8 +22,18 @@ struct Held {
     mode: Rc<Cell<u8>>,
     armed: Rc<Cell<bool>>,
     accepted: Option<(Vec<u8>, u64)>,
+    owner: Arc<Mutex<()>>,
+    lease: Option<OwnedMutexGuard<()>>,
 }
 impl Authority for Held {
+    async fn check_device_signing(&mut self, request: Authorization<'_>) -> Result<(), Error> {
+        self.lease = Some(self.owner.clone().lock_owned().await);
+        self.check(request).await
+    }
+    fn discard_current_attempt(&mut self) {
+        self.lease = None;
+        self.accepted = None;
+    }
     async fn check(&mut self, request: Authorization<'_>) -> Result<(), Error> {
         self.current
             .check(Authorization {
@@ -142,6 +156,7 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
             let (mut admission, intent) = intent_channel();
             let selected = Rc::new(Cell::new(mode));
             let armed = Rc::new(Cell::new(false));
+            let owner = Arc::new(Mutex::new(()));
             let mut keys = Keys::new(
                 Store {
                     inner: memory.clone(),
@@ -159,6 +174,8 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
                     mode: selected.clone(),
                     armed,
                     accepted: None,
+                    owner: owner.clone(),
+                    lease: None,
                 },
             );
             keys.unlock(&prf(1), "a").await.unwrap();
@@ -214,6 +231,10 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
                 }
             }
             selected.set(0);
+            assert!(
+                owner.try_lock().is_some(),
+                "case {mode} retained its scoped guard"
+            );
             if mode != 0 {
                 assert_eq!(keys.state(), State::Locked);
             }

@@ -3,10 +3,15 @@
 #![cfg(feature = "wallet-engine")]
 mod support;
 use ckmg::*;
-use futures::{FutureExt, executor::block_on};
+use futures::{
+    FutureExt,
+    executor::block_on,
+    lock::{Mutex, OwnedMutexGuard},
+};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
+    sync::Arc,
     task::{Poll, Waker},
 };
 use support::*;
@@ -16,13 +21,22 @@ wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
 type CheckedRecipient = (Binding, PublicKey, PublicKey, u64);
 
-#[derive(Clone)]
 struct Current {
     guard: Guard,
     owner_clock: Time,
     checked: Rc<RefCell<Option<CheckedRecipient>>>,
+    owner: Arc<Mutex<()>>,
+    lease: Option<OwnedMutexGuard<()>>,
 }
 impl Authority for Current {
+    async fn check_record_recipient(&mut self, request: Authorization<'_>) -> Result<(), Error> {
+        self.lease = Some(self.owner.clone().lock_owned().await);
+        self.check(request).await
+    }
+    fn discard_current_attempt(&mut self) {
+        self.lease = None;
+        self.checked.borrow_mut().take();
+    }
     async fn check(&mut self, request: Authorization<'_>) -> Result<(), Error> {
         let exact = (
             request.binding.clone(),
@@ -134,6 +148,8 @@ fn authority(guard: &Guard, time: &Time) -> Current {
         guard: guard.clone(),
         owner_clock: time.clone(),
         checked: Rc::default(),
+        owner: Arc::new(Mutex::new(())),
+        lease: None,
     }
 }
 
@@ -260,6 +276,56 @@ fn final_wait_rollback_or_newer_genuine_owner_floor_refuses_before_callback() {
             assert_eq!(future.await, Err(Error::Clock));
             assert!(!called.get());
             assert_eq!(keys.state(), State::Locked);
+        }
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn scoped_recipient_attempt_releases_its_owned_guard_on_cancel_and_success() {
+    block_on(async {
+        for cancel in [true, false] {
+            let memory = Memory::default();
+            let time = Time::default();
+            let guard = Guard::default();
+            let mut setup = machine(&memory, &time, &guard, 140);
+            create(&mut setup, &guard, &prf(1), &binding("community")).await;
+            let gate = Gate::default();
+            let owner = authority(&guard, &time);
+            let mutex = owner.owner.clone();
+            let checked = owner.checked.clone();
+            let mut keys = Keys::new(
+                Gated {
+                    memory,
+                    gate: gate.clone(),
+                },
+                time,
+                Random::new(141),
+                owner,
+            );
+            keys.unlock(&prf(1), "community").await.unwrap();
+            gate.arm();
+            let called = Cell::new(false);
+            let mut future = Box::pin(keys.with_record_recipient(|recipient| {
+                called.set(true);
+                recipient.public_key()
+            }));
+            assert!(future.as_mut().now_or_never().is_none());
+            assert!(gate.reached.get());
+            assert!(mutex.try_lock().is_none());
+            assert!(checked.borrow().is_some());
+            if cancel {
+                drop(future);
+                assert!(!called.get());
+                assert_eq!(keys.state(), State::Locked);
+            } else {
+                gate.release();
+                assert_ne!(future.await.unwrap(), [0; 32]);
+                assert!(called.get());
+                assert_eq!(keys.state(), State::Authorized);
+            }
+            assert!(mutex.try_lock().is_some());
+            assert!(checked.borrow().is_none());
         }
     });
 }

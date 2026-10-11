@@ -18,6 +18,13 @@ mod enrollment;
 mod genesis;
 mod inspection;
 mod transport;
+
+enum CurrentCheck<'a> {
+    Ordinary(Option<crate::DeviceSigning<'a>>),
+    #[cfg(feature = "wallet-engine")]
+    RecordRecipient,
+    DeviceSigning(crate::DeviceSigning<'a>),
+}
 pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
 pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
@@ -473,6 +480,24 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         evidence: &[u8],
         signing: Option<crate::DeviceSigning<'_>>,
     ) -> Result<(), Error> {
+        self.authorize_with_check(
+            action,
+            target,
+            statement,
+            evidence,
+            CurrentCheck::Ordinary(signing),
+        )
+        .await
+    }
+
+    async fn authorize_with_check(
+        &mut self,
+        action: Action,
+        target: Option<PublicKey>,
+        statement: Option<[u8; 32]>,
+        evidence: &[u8],
+        route: CurrentCheck<'_>,
+    ) -> Result<(), Error> {
         if evidence.len() > 4096 {
             return Err(Error::Limit);
         }
@@ -492,18 +517,27 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let root = current.metadata.lineage.root;
         let epoch = current.metadata.lineage.epoch;
         let device = vld0::public_key(&current.material.device);
-        self.check_authority(Authorization {
-            binding: &binding,
-            root: Some(root),
-            device,
-            epoch,
-            action,
-            target,
-            statement,
-            signing,
-            now,
-            evidence,
-        })
+        let signing = match &route {
+            CurrentCheck::Ordinary(signing) => *signing,
+            #[cfg(feature = "wallet-engine")]
+            CurrentCheck::RecordRecipient => None,
+            CurrentCheck::DeviceSigning(signing) => Some(*signing),
+        };
+        self.check_authority_with(
+            Authorization {
+                binding: &binding,
+                root: Some(root),
+                device,
+                epoch,
+                action,
+                target,
+                statement,
+                signing,
+                now,
+                evidence,
+            },
+            route,
+        )
         .await?;
         if action == Action::Use {
             self.genesis = None;
@@ -512,10 +546,25 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     }
 
     async fn check_authority(&mut self, request: Authorization<'_>) -> Result<(), Error> {
+        self.check_authority_with(request, CurrentCheck::Ordinary(None))
+            .await
+    }
+
+    async fn check_authority_with(
+        &mut self,
+        request: Authorization<'_>,
+        route: CurrentCheck<'_>,
+    ) -> Result<(), Error> {
         if request.evidence.len() > 4096 {
             return Err(Error::Limit);
         }
-        if let Err(error) = self.authority.check(request).await {
+        let result = match route {
+            CurrentCheck::Ordinary(_) => self.authority.check(request).await,
+            #[cfg(feature = "wallet-engine")]
+            CurrentCheck::RecordRecipient => self.authority.check_record_recipient(request).await,
+            CurrentCheck::DeviceSigning(_) => self.authority.check_device_signing(request).await,
+        };
+        if let Err(error) = result {
             self.fail_closed(if error == Error::Revoked {
                 State::Revoked
             } else {
@@ -1960,15 +2009,23 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         consume: impl for<'key> FnOnce(crate::wallet_engine::RecordRecipient<'key>) -> T,
     ) -> Result<T, Error> {
         self.writable()?;
-        self.authorize(Action::Use, None, None, &[]).await?;
-        self.refresh().await?;
-        let now = self.now()?;
-        let current = self.loaded()?;
+        let mut attempt = current_signing::Attempt {
+            keys: self,
+            accepted: false,
+        };
+        attempt
+            .keys
+            .authorize_with_check(Action::Use, None, None, &[], CurrentCheck::RecordRecipient)
+            .await?;
+        attempt.keys.refresh().await?;
+        let now = attempt.keys.now()?;
+        let current = attempt.keys.loaded()?;
         let binding = current.metadata.lineage.binding.clone();
         let root = current.metadata.lineage.root;
         let epoch = current.metadata.lineage.epoch;
         let device = vld0::public_key(&current.material.device);
-        let floor = match self
+        let floor = match attempt
+            .keys
             .authority
             .check_record_recipient_current(Authorization {
                 binding: &binding,
@@ -1984,7 +2041,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             }) {
             Ok(floor) => floor,
             Err(error) => {
-                self.fail_closed(if error == Error::Revoked {
+                attempt.keys.fail_closed(if error == Error::Revoked {
                     State::Revoked
                 } else {
                     State::Locked
@@ -1992,23 +2049,25 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 return Err(error);
             }
         };
-        let completed = self.now()?;
+        let completed = attempt.keys.now()?;
         if completed < floor {
-            self.fail_closed(State::Locked);
+            attempt.keys.fail_closed(State::Locked);
             return Err(Error::Clock);
         }
-        let current = self.loaded()?;
+        let current = attempt.keys.loaded()?;
         let common = current
             .material
             .identity
             .as_ref()
             .ok_or(Error::MissingCheckpoint)?;
-        passkey::with_record_recipient(
+        let output = passkey::with_record_recipient(
             common,
             current.metadata.lineage.binding.community(),
             completed,
             consume,
-        )
+        )?;
+        attempt.accepted = true;
+        Ok(output)
     }
 
     /// Restore only the engine's authenticated original ciphertext inside fresh

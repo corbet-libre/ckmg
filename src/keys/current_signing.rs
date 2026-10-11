@@ -1,13 +1,14 @@
 //! Exact original device signing with a retained-owner check after storage.
 use super::*;
 
-struct Attempt<'a, S: SecureStore, C: Clock, E: Entropy, A: Authority> {
-    keys: &'a mut Keys<S, C, E, A>,
-    accepted: bool,
+pub(super) struct Attempt<'a, S: SecureStore, C: Clock, E: Entropy, A: Authority> {
+    pub(super) keys: &'a mut Keys<S, C, E, A>,
+    pub(super) accepted: bool,
 }
 impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Drop for Attempt<'_, S, C, E, A> {
     fn drop(&mut self) {
-        if !self.accepted {
+        self.keys.authority.discard_current_attempt();
+        if !self.accepted && self.keys.state != State::Revoked {
             self.keys.fail_closed(State::Locked);
         }
     }
@@ -34,7 +35,13 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
         };
         attempt
             .keys
-            .authorize_with_signing(Action::SignDeviceEd25519, None, None, &[], Some(signing))
+            .authorize_with_check(
+                Action::SignDeviceEd25519,
+                None,
+                None,
+                &[],
+                CurrentCheck::DeviceSigning(signing),
+            )
             .await?;
         attempt.keys.refresh().await?;
         let now = attempt.keys.now()?;
