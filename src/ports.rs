@@ -378,6 +378,17 @@ pub trait Authority {
         Err(Error::Unauthorized)
     }
 
+    /// Final synchronous check for an exact device transcript after the last
+    /// Store await. The original asynchronous check must have consumed distinct
+    /// one-use intent for these same bytes and exclusive deadline. Reborrow the
+    /// retained current session, certificate, lineage and policy owners; require
+    /// the expiry to fit every owner bound. Ordinary Use, an INITIAL ACK or a
+    /// cached verdict cannot grant this operation. Return the actual owner clock
+    /// floor; no I/O or caller-supplied timestamp establishes currentness.
+    fn check_device_signing_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
     /// Reborrow the same original live owner for the dedicated record recipient
     /// after the final checkpoint await. Require the exact already-checked Use
     /// binding/root/device/epoch, no target/statement/signing/evidence, fresh

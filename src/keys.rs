@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 mod account_device;
+mod current_signing;
 mod enrollment;
 mod genesis;
 mod inspection;
