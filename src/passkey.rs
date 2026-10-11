@@ -303,12 +303,19 @@ pub fn passkey_record_reader<'prf>(
     prf: &'prf PrfOutput,
     community: &str,
 ) -> Result<PasskeyRecordReader<'prf>, Error> {
-    let owner = expand(prf, b"passkey-record-owner-v1\0", community)?;
+    let (owner, read) = record_material(prf, community)?;
     Ok(PasskeyRecordReader {
         owner: crate::vld0::public_key(&owner),
-        read: expand(prf, b"passkey-record-read-v1\0", community)?,
+        read,
         _unlock: std::marker::PhantomData,
     })
+}
+
+pub(crate) fn record_material(prf: &PrfOutput, community: &str) -> Result<(Secret, Secret), Error> {
+    Ok((
+        expand(prf, b"passkey-record-owner-v1\0", community)?,
+        expand(prf, b"passkey-record-read-v1\0", community)?,
+    ))
 }
 
 /// Derive one passkey's private root-record initializer before unlocking custody.
@@ -319,8 +326,7 @@ pub fn native_passkey_record(
     prf: &PrfOutput,
     community: &str,
 ) -> Result<crate::NativeRecordInitializer, Error> {
-    let owner = expand(prf, b"passkey-record-owner-v1\0", community)?;
-    let read = expand(prf, b"passkey-record-read-v1\0", community)?;
+    let (owner, read) = record_material(prf, community)?;
     let schema = crate::NativeRecordSchema::dflt(1).map_err(|_| Error::Encoding)?;
     Ok(crate::native_record::owner(schema, &owner, &read))
 }

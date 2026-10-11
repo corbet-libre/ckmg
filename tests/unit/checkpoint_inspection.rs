@@ -1,6 +1,9 @@
 //! Real original checkpoint encryption and lineage signatures; no Authority fixture.
 use super::*;
 
+#[path = "checkpoint_publication.rs"]
+mod publication_tests;
+
 const COMMUNITY: &str = "inspection-community";
 
 fn fixture() -> (PrfOutput, Metadata, Material) {

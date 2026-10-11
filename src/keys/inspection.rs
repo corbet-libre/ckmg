@@ -3,6 +3,7 @@ use super::*;
 
 mod completion;
 mod lineage;
+mod publication;
 pub use completion::{CompletionIntent, PendingCompletion, PendingCreation};
 pub(in crate::keys) use lineage::lineage_secret;
 pub use lineage::{InitialLineageReader, LineageReadCustody, ProvisionalLineage};
