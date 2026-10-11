@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Run the original native owner gates; full Wasm/browser/coverage stays in verify.
 set -euo pipefail
+exec 2>&1
 python3 .github/check-first-party.py
 rustc --version
 cargo metadata --locked --format-version 1 > dependency-metadata.json
