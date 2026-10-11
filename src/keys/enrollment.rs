@@ -6,7 +6,8 @@ use super::*;
 mod tests;
 
 /// Private original root and operation prepared before the server challenge.
-/// Only an opaque commitment escapes; there is no Receipt, Keys or root getter.
+/// Only original public binding and an opaque commitment escape; there is no
+/// Receipt, Keys or root getter.
 pub struct EnrollmentSeed {
     binding: Binding,
     root: Secret,
@@ -15,6 +16,12 @@ pub struct EnrollmentSeed {
 redacted!(EnrollmentSeed);
 
 impl EnrollmentSeed {
+    /// Original caller-supplied scope and member, unchanged by preparation.
+    /// This is public composition data, never an accepted enrollment or authority.
+    pub fn binding(&self) -> &Binding {
+        &self.binding
+    }
+
     /// Generate the original nonzero random root and operation exactly once.
     /// The trusted composer supplies the original Passport-derived binding.
     pub fn new(binding: Binding, entropy: &mut impl Entropy) -> Result<Self, Error> {
