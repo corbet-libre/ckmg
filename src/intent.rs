@@ -21,7 +21,8 @@ pub struct AdmittedCommand {
     pub target: Option<PublicKey>,
     /// Original owner pairing/transition digest where applicable.
     pub statement: Option<[u8; 32]>,
-    /// Exact original owner bytes, only for SignDeviceEd25519. Never a request-body transcript.
+    /// Exact original owner bytes for device signing or fixed account-device
+    /// authorization. Never a request-body transcript.
     pub transcript: Option<Vec<u8>>,
     /// Exclusive trusted Unix-second deadline.
     pub expires: u64,
@@ -68,7 +69,10 @@ impl IntentAdmission {
         {
             return Err(Error::Encoding);
         }
-        if (command.action == Action::SignDeviceEd25519) != command.transcript.is_some()
+        if matches!(
+            command.action,
+            Action::SignDeviceEd25519 | Action::AuthorizeAccountDevice
+        ) != command.transcript.is_some()
             || command.transcript.as_ref().is_some_and(|bytes| {
                 bytes.len() > crate::MAX_MESSAGE_BYTES
                     || command.target.is_some()

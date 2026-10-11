@@ -12,10 +12,12 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+mod account_device;
 mod enrollment;
 mod genesis;
 mod inspection;
 mod transport;
+pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
 pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,

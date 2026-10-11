@@ -156,6 +156,9 @@ pub enum Action {
     ReadLineage,
     /// Sign only the exact original bytes and deadline in `Authorization::signing`.
     SignDeviceEd25519,
+    /// Issue only the original fixed account authorization for this current device.
+    /// Separate exact local intent and a retained current owner are mandatory.
+    AuthorizeAccountDevice,
     /// Lend the broad synchronous Profile signer; requires separate explicit admission.
     /// Metadata reads and exact Board signing must never authorize this capability.
     LendDeviceSigner,
@@ -200,7 +203,8 @@ pub struct Authorization<'a> {
     pub target: Option<PublicKey>,
     /// Digest of the exact pairing request or transition, where applicable.
     pub statement: Option<[u8; 32]>,
-    /// Present only for `SignDeviceEd25519`; bytes are borrowed through authorization.
+    /// Present only for `SignDeviceEd25519` or `AuthorizeAccountDevice`;
+    /// bytes are borrowed through authorization.
     pub signing: Option<DeviceSigning<'a>>,
     /// Current injected time.
     pub now: u64,
@@ -360,6 +364,17 @@ pub trait Authority {
     /// exclusive deadlines and nonregressing owner clock. No I/O or cached
     /// accepting result is sufficient. Return the genuine owner's checked floor.
     fn check_checkpoint_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Final synchronous check for the exact original account-device transcript
+    /// after Keys' last Store await. Reborrow the same retained genuine session,
+    /// certificate, current lineage and policy owners; require the requested
+    /// expiry to fit every exclusive owner deadline. The preceding asynchronous
+    /// check must already have consumed separate one-use local intent. A cached
+    /// verdict, ordinary Use or INITIAL provenance alone cannot authorize this.
+    /// Return the actual checked owner clock floor; no I/O or caller time proof.
+    fn check_account_device_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
         Err(Error::Unauthorized)
     }
 

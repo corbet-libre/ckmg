@@ -222,7 +222,8 @@ requests `Action::SignDeviceEd25519` with `Authorization::signing =
 Some(DeviceSigning { transcript, expires })`. The caller passes original immutable
 owner-prepared bytes and the original exclusive local grant deadline; no new
 digest, wire envelope or callback is introduced. `AdmittedCommand::transcript`
-contains these exact bytes. Other admitted actions require `transcript: None`.
+contains these exact bytes. The fixed `AuthorizeAccountDevice` operation below
+also requires its exact transcript. Other actions require `transcript: None`.
 The original intent channel consumes one attempt, including byte/deadline/action
 mismatch, and remains reserved until its guard drops. The trusted authority must
 validate actual current G3, ensure the deadline does not outlive that authority,
@@ -380,3 +381,25 @@ RAM transport packet can leave it. An authenticated current Epoch and genuine
 admitted account owner must be supplied separately before opening. This does not
 initialize an account, export an opening or provide a proving adapter. No
 accepting production adapter or executed qualification is claimed in this stage.
+
+
+### Fixed account-device root authorization
+
+`prepare_account_device(expires)` prepares the original `cmsg.device.v1` public
+statement from the loaded community binding, current root and logical device.
+It hashes only the canonical original 48-byte community pseudonym into the
+account member ID. Global Wallet scope, UUIDs and noncanonical bindings refuse.
+The private plan is bound to this exact live Keys session and checkpoint stamp;
+it cannot be constructed or cloned by a caller and carries no authority.
+
+`authorize_account_device(plan)` requires a separate one-use
+`Action::AuthorizeAccountDevice` intent for those exact bytes and deadline.
+After the final Store read, the default-refusing `check_account_device_current`
+port must freshly reborrow the original retained session, certificate, lineage
+and policy owners, and bound expiry by every current owner deadline. Any error,
+clock rollback, checkpoint change or cancellation locks the live attempt. Only
+then does Keys sign the original fixed transcript internally with its root;
+no root key or general root signer is exported. The public output alone grants
+no account admission or initialized balance. Production composition must supply
+the genuine owner join; ordinary Use, historical INITIAL ACK and an intent alone
+are insufficient. This operation does not alter the VLD0 lineage wire format.
