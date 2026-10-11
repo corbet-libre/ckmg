@@ -204,6 +204,86 @@ macro_rules! shared {
 }
 
 shared!(
+    immutable_publication_commitment_binds_original_exact_intent,
+    {
+        let (keys, _, receipt, _) = fixture().await;
+        let nonce = [61; 24];
+        let commitment = receipt
+            .initial_publication_commitment(&nonce, PAYLOAD, 1000, 1060)
+            .unwrap();
+        let restored: Receipt =
+            serde_json::from_slice(&serde_json::to_vec(&receipt).unwrap()).unwrap();
+        assert_eq!(
+            restored
+                .initial_publication_commitment(&nonce, PAYLOAD, 1000, 1060)
+                .unwrap(),
+            commitment
+        );
+        for (other_nonce, evidence, start, end) in [
+            ([62; 24], PAYLOAD, 1000, 1060),
+            (nonce, b"different packed evidence".as_slice(), 1000, 1060),
+            (nonce, PAYLOAD, 1001, 1060),
+            (nonce, PAYLOAD, 1000, 1061),
+        ] {
+            assert_ne!(
+                receipt
+                    .initial_publication_commitment(&other_nonce, evidence, start, end)
+                    .unwrap(),
+                commitment
+            );
+        }
+        for binding in [false, true] {
+            let mut changed = receipt.clone();
+            if binding {
+                let Change::Created(lineage) = &mut changed.change else {
+                    unreachable!()
+                };
+                lineage.binding = Binding::new("other-community", "fixture").unwrap();
+                lineage.signature = vld0::sign(
+                    keys.loaded().unwrap().material.root().unwrap(),
+                    &lineage.signed_bytes().unwrap(),
+                )
+                .unwrap();
+            } else {
+                changed.operation = OperationId([63; 32]);
+            }
+            let device = changed.attestation.as_ref().unwrap().device;
+            changed.attestation.as_mut().unwrap().signature = vld0::sign(
+                &keys.loaded().unwrap().material.device,
+                &changed.attestation_bytes(device).unwrap(),
+            )
+            .unwrap();
+            assert_ne!(
+                changed
+                    .initial_publication_commitment(&nonce, PAYLOAD, 1000, 1060)
+                    .unwrap(),
+                commitment
+            );
+        }
+        assert!(
+            receipt
+                .initial_publication_commitment(&nonce, &[], 1000, 1060)
+                .is_err()
+        );
+        assert!(
+            receipt
+                .initial_publication_commitment(&nonce, PAYLOAD, 1060, 1060)
+                .is_err()
+        );
+        assert!(
+            receipt
+                .initial_publication_commitment(
+                    &nonce,
+                    &vec![1; cdht::MAX_SUBKEY_SIZE + 1],
+                    1000,
+                    1060
+                )
+                .is_err()
+        );
+    }
+);
+
+shared!(
     only_original_fixed_genesis_descriptor_and_encrypted_value_escape,
     {
         let (mut keys, _, receipt, _) = fixture().await;

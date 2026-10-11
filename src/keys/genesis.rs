@@ -1,6 +1,38 @@
 //! Fixed original CDHT genesis outputs, never a lent root signer or cipher.
 use super::*;
 
+impl Receipt {
+    /// Original immutable first-publication identity for the enrollment owner's
+    /// opaque compare-and-set. This authorizes nothing and signs no output.
+    /// Mutable Store progress is excluded; the exact receipt, output nonce,
+    /// packed evidence and unchanged intent lifetime are all bound canonically.
+    pub fn initial_publication_commitment(
+        &self,
+        nonce: &[u8; 24],
+        packed_evidence: &[u8],
+        prepared_at: u64,
+        expires: u64,
+    ) -> Result<[u8; 32], Error> {
+        if packed_evidence.is_empty() || packed_evidence.len() > cdht::MAX_SUBKEY_SIZE {
+            return Err(Error::Limit);
+        }
+        if prepared_at >= expires || self.operation.as_bytes() == &[0; 32] {
+            return Err(Error::Unauthorized);
+        }
+        let Change::Created(_) = self.change else {
+            return Err(Error::Unauthorized);
+        };
+        let (lineage, author) = self.attested_lineage()?;
+        if lineage.epoch != 1 || lineage.revision != 1 || lineage.devices.as_slice() != [author] {
+            return Err(Error::Unauthorized);
+        }
+        digest(
+            b"ckmg.initial-publication.v1\0",
+            &(self, nonce, packed_evidence, prepared_at, expires),
+        )
+    }
+}
+
 pub(super) struct InitialPublication {
     operation: OperationId,
     stamp: [u8; 32],
