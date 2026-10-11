@@ -352,6 +352,17 @@ pub trait Authority {
     /// Authorize this exact request or refuse with a coarse error.
     fn check(&mut self, request: Authorization<'_>) -> impl Future<Output = Result<(), Error>>;
 
+    /// Synchronously reborrow the original current owner for an already
+    /// authenticated normal checkpoint bootstrap. The request must be the same
+    /// exact Use lineage, device, statement and evidence previously checked by
+    /// `check`; no pending creation or historical genesis deadline is renewed.
+    /// Require the actual retained session/device lease, current signed policy,
+    /// exclusive deadlines and nonregressing owner clock. No I/O or cached
+    /// accepting result is sufficient. Return the genuine owner's checked floor.
+    fn check_checkpoint_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
     /// Dedicated, one-attempt certified genesis admission. Existing authorities
     /// refuse by default; Create, transport use or normal Use cannot substitute.
     fn check_genesis(
