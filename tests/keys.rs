@@ -1681,3 +1681,32 @@ fn combined_record_capability_preserves_original_domains_and_rechecks_authority(
         }
     });
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn lineage_read_capability_is_exported_only_under_current_authority_for_the_own_record() {
+    block_on(async {
+        let time = Time::default();
+        let (guard, other_guard) = (Guard::default(), Guard::default());
+        let mut member = machine(&Memory::default(), &time, &guard, 91);
+        let mut other = machine(&Memory::default(), &time, &other_guard, 92);
+        create(&mut member, &guard, &prf(1), &binding("a")).await;
+        create(&mut other, &other_guard, &prf(2), &binding("a")).await;
+        let lineage = member.lineage().await.unwrap();
+        let capability = member.export_lineage_read_capability().await.unwrap();
+        let reader =
+            LineageReadCustody::from_capability(capability.as_bytes(), &lineage.binding).unwrap();
+        assert_eq!(reader.owner(), lineage.root);
+        // Stable across a lock and unlock, and never another member's record.
+        member.lock();
+        assert!(member.export_lineage_read_capability().await.is_err());
+        member.unlock(&prf(1), "a").await.unwrap();
+        let again = member.export_lineage_read_capability().await.unwrap();
+        assert_eq!(again.as_bytes(), capability.as_bytes());
+        let theirs = other.export_lineage_read_capability().await.unwrap();
+        assert_ne!(theirs.as_bytes(), capability.as_bytes());
+        // Revocation of the live device refuses further export.
+        guard.0.borrow_mut().clear();
+        assert!(member.export_lineage_read_capability().await.is_err());
+    });
+}

@@ -25,6 +25,93 @@ impl LineageReadCustody {
 }
 redacted!(LineageReadCustody);
 
+const CAPABILITY_DOMAIN: &[u8] = b"ckmg.lineage-read.v1\0";
+
+/// Peer-shareable READ capability of this member's OWN lineage record for one
+/// community scope: the record owner's public key plus the purpose-separated
+/// read key (the full record key of the Veilid model). It carries no writer,
+/// root, device or Store secret and exists only for that one record. It is
+/// produced solely by [`crate::Keys::export_lineage_read_capability`] under
+/// current member authority, and its bytes travel only inside signed messages.
+pub struct LineageReadCapability(Zeroizing<Vec<u8>>);
+impl LineageReadCapability {
+    /// The opaque handle bytes to place in a signed wave request or announcement.
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+redacted!(LineageReadCapability);
+
+pub(in crate::keys) fn lineage_read_capability(
+    root: &Secret,
+    lineage: &Lineage,
+) -> Result<LineageReadCapability, Error> {
+    let read = lineage_secret(root, lineage)?;
+    let mut out = Zeroizing::new(CAPABILITY_DOMAIN.to_vec());
+    for part in [
+        lineage.binding.community().as_bytes(),
+        lineage.binding.member().as_bytes(),
+    ] {
+        out.extend_from_slice(
+            &u16::try_from(part.len())
+                .map_err(|_| Error::Limit)?
+                .to_be_bytes(),
+        );
+        out.extend_from_slice(part);
+    }
+    out.extend_from_slice(lineage.root.value());
+    out.extend_from_slice(&*read);
+    Ok(LineageReadCapability(out))
+}
+
+impl LineageReadCustody {
+    /// Rebuild read-only custody of ONE peer's lineage record from a handle that
+    /// the peer signed and handed over. The embedded binding must equal the
+    /// expected peer binding. The handle only lets the holder decrypt; the
+    /// adapter still verifies the record owner's signatures and the lineage
+    /// evidence against the current Charter.
+    pub fn from_capability(bytes: &[u8], expected: &Binding) -> Result<Self, Error> {
+        let mut rest = bytes
+            .strip_prefix(CAPABILITY_DOMAIN)
+            .ok_or(Error::Encoding)?;
+        fn take<'a>(rest: &mut &'a [u8], count: usize) -> Result<&'a [u8], Error> {
+            if rest.len() < count {
+                return Err(Error::Encoding);
+            }
+            let (head, tail) = rest.split_at(count);
+            *rest = tail;
+            Ok(head)
+        }
+        let mut parts = Vec::new();
+        for _ in 0..2 {
+            let length = u16::from_be_bytes(
+                take(&mut rest, 2)?
+                    .try_into()
+                    .map_err(|_| Error::Encoding)?,
+            );
+            parts.push(take(&mut rest, usize::from(length))?.to_vec());
+        }
+        let owner: [u8; 32] = take(&mut rest, 32)?
+            .try_into()
+            .map_err(|_| Error::Encoding)?;
+        let read: [u8; 32] = take(&mut rest, 32)?
+            .try_into()
+            .map_err(|_| Error::Encoding)?;
+        if !rest.is_empty() {
+            return Err(Error::Encoding);
+        }
+        if parts[0] != expected.community().as_bytes() || parts[1] != expected.member().as_bytes() {
+            return Err(Error::Unauthorized);
+        }
+        let owner = PublicKey::new(VLD0, owner);
+        vld0::validate_public_key(&owner)?;
+        Ok(Self {
+            owner,
+            read: Zeroizing::new(read),
+        })
+    }
+}
+
 /// Fixed initial lineage read custody for one enclosing completion attempt.
 /// Only the original purpose-separated read key is retained. This grants no
 /// writer, root, Store access, ordinary Keys Use or acknowledgement. The

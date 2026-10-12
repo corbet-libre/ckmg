@@ -519,3 +519,50 @@ fn compound_wrapping_rotates_while_wallet_identity_stays_stable() {
         after.record(None).unwrap().public_key()
     );
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn lineage_read_capability_reads_only_the_one_record_for_the_exact_binding() {
+    let (_, metadata, material) = fixture();
+    let lineage = &metadata.lineage;
+    let capability = lineage_read_capability(material.root().unwrap(), lineage).unwrap();
+    assert_eq!(
+        format!("{capability:?}"),
+        "LineageReadCapability([redacted])"
+    );
+    let reader =
+        LineageReadCustody::from_capability(capability.as_bytes(), &lineage.binding).unwrap();
+    assert_eq!(reader.owner(), lineage.root);
+    // The peer's custody decrypts exactly what the owner's lineage cipher encrypted.
+    let secret = lineage_secret(material.root().unwrap(), lineage).unwrap();
+    let nonce = [7u8; 24];
+    let sealed = crate::Vld0RecordCipher { secret: &secret }
+        .crypt(&nonce, b"lineage evidence")
+        .unwrap();
+    assert_eq!(
+        &**reader.open(&nonce, &sealed).unwrap(),
+        b"lineage evidence"
+    );
+    // Another binding, truncation, trailing bytes and a foreign domain refuse.
+    let other = Binding::new(lineage.binding.community(), "someone-else").unwrap();
+    assert_eq!(
+        LineageReadCustody::from_capability(capability.as_bytes(), &other).err(),
+        Some(Error::Unauthorized)
+    );
+    let bytes = capability.as_bytes();
+    assert!(
+        LineageReadCustody::from_capability(&bytes[..bytes.len() - 1], &lineage.binding).is_err()
+    );
+    let mut longer = bytes.to_vec();
+    longer.push(0);
+    assert!(LineageReadCustody::from_capability(&longer, &lineage.binding).is_err());
+    let mut foreign = bytes.to_vec();
+    foreign[0] ^= 1;
+    assert!(LineageReadCustody::from_capability(&foreign, &lineage.binding).is_err());
+    // A different root (another record) yields a different read key.
+    let mut changed = bytes.to_vec();
+    let last = changed.len() - 1;
+    changed[last] ^= 1;
+    let wrong = LineageReadCustody::from_capability(&changed, &lineage.binding).unwrap();
+    assert_ne!(&**wrong.open(&nonce, &sealed).unwrap(), b"lineage evidence");
+}

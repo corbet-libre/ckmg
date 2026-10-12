@@ -8,8 +8,10 @@ pub(in crate::keys) use initial_ack::StoredInitial;
 mod lineage;
 mod publication;
 pub use completion::{CompletionIntent, PendingCompletion, PendingCreation};
-pub(in crate::keys) use lineage::lineage_secret;
-pub use lineage::{InitialLineageReader, LineageReadCustody, ProvisionalLineage};
+pub use lineage::{
+    InitialLineageReader, LineageReadCapability, LineageReadCustody, ProvisionalLineage,
+};
+pub(in crate::keys) use lineage::{lineage_read_capability, lineage_secret};
 
 #[cfg(test)]
 #[path = "../../tests/unit/checkpoint_inspection.rs"]

@@ -29,8 +29,8 @@ pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
 pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
-    CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCustody,
-    PendingCompletion, PendingCreation, ProvisionalLineage, inspect_checkpoint,
+    CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCapability,
+    LineageReadCustody, PendingCompletion, PendingCreation, ProvisionalLineage, inspect_checkpoint,
 };
 pub use transport::TransportSession;
 
@@ -1870,6 +1870,21 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             secret,
             public_key: *vld0::public_key(secret).value(),
         })))
+    }
+
+    /// Export this member's OWN lineage-record read capability so a peer can read
+    /// it (the Veilid record-key model). Requires fresh live-device `Use`
+    /// authorization with the current lineage. It covers only this scope's own
+    /// lineage record and never carries a writer, root, device or Store secret.
+    /// The caller may place the bytes only inside its own signed message.
+    pub async fn export_lineage_read_capability(&mut self) -> Result<LineageReadCapability, Error> {
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let current = self.loaded()?;
+        crate::keys::inspection::lineage_read_capability(
+            current.material.root()?,
+            &current.metadata.lineage,
+        )
     }
 
     /// Lend the originating scope identity after fresh live-device authorization.
