@@ -165,3 +165,57 @@ fn holder_rederives_identity_and_requires_exact_current_wallet_custody() {
 fn profiling_runtime_is_linked() {
     let _ = browser_coverage_runtime::__owned_test_module_signature();
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_pending_creation_holder_seed_serves_only_the_exact_pending_created_receipt() {
+    block_on(async {
+        let (store, time, guard) = (Memory::default(), Time::default(), Guard::default());
+        let mut keys = machine(&store, &time, &guard, 1);
+        let b = binding("wallet");
+        let receipt = keys
+            .create_scope(
+                &prf(1),
+                b.clone(),
+                info(),
+                &consent(Action::Create, &b, None, 0, None, None),
+            )
+            .await
+            .unwrap();
+        guard.publish(&receipt);
+        assert!(matches!(
+            keys.with_holder_seed(|seed| seed.into_passport_holder())
+                .await,
+            Err(Error::Pending)
+        ));
+        let other = Memory::default();
+        let mut foreign_keys = machine(&other, &time, &guard, 2);
+        let fb = binding("wallet");
+        let foreign = foreign_keys
+            .create_scope(
+                &prf(2),
+                fb.clone(),
+                info(),
+                &consent(Action::Create, &fb, None, 0, None, None),
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            keys.with_holder_seed_for_pending_creation(&foreign, |seed| seed
+                .into_passport_holder())
+                .await,
+            Err(Error::Unauthorized)
+        ));
+        keys.with_holder_seed_for_pending_creation(&receipt, |seed| seed.into_passport_holder())
+            .await
+            .unwrap()
+            .unwrap();
+        keys.acknowledge(receipt.operation).await.unwrap();
+        assert!(matches!(
+            keys.with_holder_seed_for_pending_creation(&receipt, |seed| seed
+                .into_passport_holder())
+                .await,
+            Err(Error::Unauthorized)
+        ));
+    });
+}

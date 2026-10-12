@@ -77,3 +77,103 @@ fn original_engine_sealing_restores_only_the_same_retained_common_identity() {
         assert_eq!(first.state(), State::Revoked);
     });
 }
+
+async fn pending_creation(
+    store: &Memory,
+    time: &Time,
+    guard: &Guard,
+    seed: u8,
+    community: &str,
+) -> (Machine, Receipt) {
+    let mut keys = machine(store, time, guard, seed);
+    let b = binding(community);
+    let receipt = keys
+        .create_scope(
+            &prf(seed),
+            b.clone(),
+            info(),
+            &consent(Action::Create, &b, None, 0, None, None),
+        )
+        .await
+        .unwrap();
+    guard.publish(&receipt);
+    (keys, receipt)
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_pending_creation_path_serves_only_the_exact_pending_created_receipt() {
+    block_on(async {
+        let (store, time, guard) = (Memory::default(), Time::default(), Guard::default());
+        let (mut keys, receipt) = pending_creation(&store, &time, &guard, 1, "wallet").await;
+        // The ordinary path is closed while the output is pending; the dedicated one opens.
+        assert!(matches!(keys.wallet_engine().await, Err(Error::Pending)));
+        keys.wallet_engine_for_pending_creation(&receipt)
+            .await
+            .unwrap();
+
+        // A receipt of another scope, or one with a different operation, is refused.
+        let other = Memory::default();
+        let (_, foreign) = pending_creation(&other, &time, &guard, 2, "wallet").await;
+        assert!(matches!(
+            keys.wallet_engine_for_pending_creation(&foreign).await,
+            Err(Error::Unauthorized)
+        ));
+        // Nothing was opened by the refusal.
+        assert!(matches!(keys.wallet_engine().await, Err(Error::Pending)));
+
+        // After the acknowledgment there is no pending output: the path is closed.
+        keys.acknowledge(receipt.operation).await.unwrap();
+        assert!(matches!(
+            keys.wallet_engine_for_pending_creation(&receipt).await,
+            Err(Error::Unauthorized)
+        ));
+        keys.wallet_engine().await.unwrap();
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_pending_creation_path_refuses_a_pending_output_that_is_not_a_creation() {
+    block_on(async {
+        let (store, time, guard) = (Memory::default(), Time::default(), Guard::default());
+        let mut first = machine(&store, &time, &guard, 111);
+        create(&mut first, &guard, &prf(1), &binding("wallet")).await;
+        let anchor = first.lineage().await.unwrap();
+        let mut new = machine(&Memory::default(), &time, &guard, 113);
+        request(&mut new, &prf(2), &anchor).await;
+        let pending = new.pending_output().await.unwrap().unwrap();
+        assert!(!matches!(pending.change, Change::Created(_)));
+        assert!(
+            new.wallet_engine_for_pending_creation(&pending)
+                .await
+                .is_err()
+        );
+        assert!(new.wallet_engine().await.is_err());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_pending_creation_path_still_needs_fresh_use_authority() {
+    block_on(async {
+        let (store, time, guard) = (Memory::default(), Time::default(), Guard::default());
+        let mut keys = machine(&store, &time, &guard, 1);
+        let b = binding("wallet");
+        // The lineage is deliberately NOT published to the authority fixture.
+        let receipt = keys
+            .create_scope(
+                &prf(1),
+                b.clone(),
+                info(),
+                &consent(Action::Create, &b, None, 0, None, None),
+            )
+            .await
+            .unwrap();
+        assert!(
+            keys.wallet_engine_for_pending_creation(&receipt)
+                .await
+                .is_err()
+        );
+    });
+}
