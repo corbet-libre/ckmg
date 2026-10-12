@@ -141,8 +141,22 @@ fn the_pending_creation_path_refuses_a_pending_output_that_is_not_a_creation() {
         create(&mut first, &guard, &prf(1), &binding("wallet")).await;
         let anchor = first.lineage().await.unwrap();
         let mut new = machine(&Memory::default(), &time, &guard, 113);
-        request(&mut new, &prf(2), &anchor).await;
-        let pending = new.pending_output().await.unwrap().unwrap();
+        let pending = new
+            .request_pairing(
+                &prf(2),
+                &anchor,
+                info(),
+                &consent(
+                    Action::RequestPairing,
+                    &anchor.binding,
+                    Some(anchor.root),
+                    anchor.epoch,
+                    None,
+                    Some(anchor.digest().unwrap()),
+                ),
+            )
+            .await
+            .unwrap();
         assert!(!matches!(pending.change, Change::Created(_)));
         assert!(
             new.wallet_engine_for_pending_creation(&pending)
