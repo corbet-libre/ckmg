@@ -2005,6 +2005,44 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .await?
     }
 
+    /// The same engine for the one moment the ordinary path is closed: the exact
+    /// original `Created` output is still pending and its acknowledgment is the
+    /// transaction that initializes the Wallet records. The caller names the
+    /// receipt; it must equal the durable pending output, which must be a
+    /// `Created` change, both before and after fresh current Use authority.
+    /// Any other pending output, or none, is refused; no other write is enabled.
+    #[cfg(feature = "wallet-engine")]
+    pub async fn wallet_engine_for_pending_creation(
+        &mut self,
+        receipt: &Receipt,
+    ) -> Result<crate::wallet_engine::Engine, Error> {
+        self.refresh().await?;
+        self.check_pending_creation(receipt)?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        self.check_pending_creation(receipt)?;
+        let current = self.loaded()?;
+        let seeds = current
+            .material
+            .identity
+            .as_ref()
+            .ok_or(Error::MissingCheckpoint)?;
+        let roots = passkey::IdentityRoots::retained(
+            current.metadata.lineage.binding.community(),
+            vld0::public_key(&current.material.device),
+            seeds,
+        )?;
+        roots.wallet_engine()
+    }
+
+    #[cfg(feature = "wallet-engine")]
+    fn check_pending_creation(&self, receipt: &Receipt) -> Result<(), Error> {
+        let pending = self.loaded()?.metadata.output.as_ref();
+        if !matches!(receipt.change, Change::Created(_)) || pending != Some(receipt) {
+            return Err(Error::Unauthorized);
+        }
+        Ok(())
+    }
+
     /// Lend the dedicated common-root record recipient after fresh normal Use.
     /// Scope comes from this loaded original Binding, never a caller domain.
     /// Fetch the whole bounded object first, then freshly authenticate its Epoch
