@@ -55,9 +55,10 @@ pub use keys::{
     AccountDeviceAuthorization, AccountDevicePlan, Change, CheckpointBootstrap,
     CheckpointInspection, CheckpointInspector, CheckpointRecordCustody, CompletionIntent,
     DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, EnrollmentSeed,
-    InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys, LineageReadCapability, LineageReadCustody,
-    OperationId, PendingCompletion, PendingCreation, ProvisionalLineage, Receipt, RestoreRoot,
-    State, TransportSession, UnenrolledCreation, Vld0Signer, inspect_checkpoint,
+    InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys, LineageReadCapability,
+    LineageReadCustody, OperationId, PendingCompletion, PendingCreation, ProvisionalLineage,
+    Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation, Vld0Signer,
+    inspect_checkpoint,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
