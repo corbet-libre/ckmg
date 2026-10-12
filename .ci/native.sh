@@ -10,3 +10,5 @@ cargo clippy --locked --all-targets -- -D warnings
 cargo test --locked
 cargo clippy --locked --features wallet-engine --test record_recipient -- -D warnings
 cargo test --locked --features wallet-engine --test record_recipient
+cargo clippy --locked --features wallet-engine,passport --test wallet_engine --test passport -- -D warnings
+cargo test --locked --features wallet-engine,passport --test wallet_engine --test passport
