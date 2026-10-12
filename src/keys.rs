@@ -2011,6 +2011,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// receipt; it must equal the durable pending output, which must be a
     /// `Created` change, both before and after fresh current Use authority.
     /// Any other pending output, or none, is refused; no other write is enabled.
+    #[cfg(any(feature = "wallet-engine", feature = "passport"))]
     async fn with_identity_for_pending_creation<T>(
         &mut self,
         receipt: &Receipt,
@@ -2055,6 +2056,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .await
     }
 
+    #[cfg(any(feature = "wallet-engine", feature = "passport"))]
     fn check_pending_creation(&self, receipt: &Receipt) -> Result<(), Error> {
         let pending = self.loaded()?.metadata.output.as_ref();
         if !matches!(receipt.change, Change::Created(_)) || pending != Some(receipt) {
