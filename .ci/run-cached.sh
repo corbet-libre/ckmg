@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Execute the manifest's selected checks with content-keyed result reuse.
 set -euo pipefail
+exec 2>&1
 : "${CCID_BIN:?Missing verified ccid job runtime}"
 : "${CI_COMMIT_SHA:?Missing verified source revision}"
 : "${CI_REPOSITORY_URL:?Missing canonical repository identity}"
