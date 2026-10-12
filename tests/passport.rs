@@ -190,7 +190,7 @@ fn the_pending_creation_holder_seed_serves_only_the_exact_pending_created_receip
         ));
         let other = Memory::default();
         let mut foreign_keys = machine(&other, &time, &guard, 2);
-        let fb = binding("wallet");
+        let fb = binding("foreign");
         let foreign = foreign_keys
             .create_scope(
                 &prf(2),

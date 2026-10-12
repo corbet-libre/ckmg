@@ -114,7 +114,7 @@ fn the_pending_creation_path_serves_only_the_exact_pending_created_receipt() {
 
         // A receipt of another scope, or one with a different operation, is refused.
         let other = Memory::default();
-        let (_, foreign) = pending_creation(&other, &time, &guard, 2, "wallet").await;
+        let (_, foreign) = pending_creation(&other, &time, &guard, 2, "foreign").await;
         assert!(matches!(
             keys.wallet_engine_for_pending_creation(&foreign).await,
             Err(Error::Unauthorized)
