@@ -22,7 +22,7 @@ cache_outputs = ["dependency-metadata.json"]
 [checks.resolve-dependencies]
 kind = "commands"
 commands = [["bash", ".ci/resolve-dependencies.sh"]]
-# The pinned renderer predates cache=false; the runner uses direct uncached check.
+cache = false
 cache_outputs = ["Cargo.lock"]
 
 [render]
