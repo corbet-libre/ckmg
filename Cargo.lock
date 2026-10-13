@@ -1268,7 +1268,7 @@ dependencies = [
 [[package]]
 name = "cdht"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cdht.git?branch=v01#b3173c70644dacd8f5e9b1bd6478859fe03b4f03"
+source = "git+https://git.corbet.ch/corbet-foss/cdht.git?branch=v01#7f3ec513671deaf31222caed7b54482919e3eb73"
 dependencies = [
  "blake3",
  "capnp",
@@ -1312,7 +1312,7 @@ dependencies = [
 [[package]]
 name = "cgrd"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cgrd?branch=main#2d8048ee6e7a503e158e704fa50ed924f8713618"
+source = "git+https://git.corbet.ch/corbet-foss/cgrd?branch=main#516a5e5039c42c2c76162aa1bc9e0d29ce096256"
 dependencies = [
  "bigdecimal",
  "cpns",
@@ -1507,7 +1507,7 @@ checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
 [[package]]
 name = "cnvl"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cnvl.git?branch=v01#f873e8621ec4bcc4bcab5a5513a77728869ac196"
+source = "git+https://git.corbet.ch/corbet-foss/cnvl.git?branch=v01#8c1cae0b9a2b0837c6923c52cf833879e8cad036"
 dependencies = [
  "cgrd",
  "chacha20poly1305",
@@ -1667,7 +1667,7 @@ dependencies = [
 [[package]]
 name = "cpns"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpns?branch=main#6f6954b70b8d4e39d47c2a73325eabc6ee59fe7d"
+source = "git+https://git.corbet.ch/corbet-foss/cpns?branch=main#817205414231a6dd76cf86e63c6bc083b78b844a"
 dependencies = [
  "getrandom 0.4.3",
  "sha2 0.11.0",
@@ -1678,7 +1678,7 @@ dependencies = [
 [[package]]
 name = "cpsd"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cpsd?branch=main#3a9c9c13715313620ec8c1a1b8a1f6c8084e56c4"
+source = "git+https://git.corbet.ch/corbet-foss/cpsd?branch=main#8e14f21e1f632fa8034088c4af5001b4e6ca90ff"
 dependencies = [
  "ark-bls12-381",
  "ark-ec 0.4.2",
@@ -1726,7 +1726,7 @@ dependencies = [
 [[package]]
 name = "crbk"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/crbk?branch=main#d3431a1bcf8f440be3f3ee0def7588ced2f752db"
+source = "git+https://git.corbet.ch/corbet-foss/crbk?branch=main#c3701ed4f9976ef13ea4039f8d298cfd1d294965"
 dependencies = [
  "semver",
  "serde",
@@ -1844,7 +1844,7 @@ dependencies = [
 [[package]]
 name = "csgn"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/csgn?branch=main#427b82cdbce26e7226fb444caf4b6c505d691c0f"
+source = "git+https://git.corbet.ch/corbet-foss/csgn?branch=main#516b1d4102bc89601a8070c821b730e834911014"
 dependencies = [
  "ciborium-ll",
  "coset",
@@ -1973,7 +1973,7 @@ dependencies = [
 [[package]]
 name = "cvln"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cvln.git?branch=v01#07fe157f65f1285d32648df7472d7914840e4bc7"
+source = "git+https://git.corbet.ch/corbet-foss/cvln.git?branch=main#c8520206f0ed3635b148d1f786dc3ae35a96907d"
 dependencies = [
  "flume",
  "parking_lot",
@@ -1984,7 +1984,7 @@ dependencies = [
 [[package]]
 name = "cwlt-engine"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/cwlt?branch=main#8e2d0620d56e89dfb0d96b4fa58e316c77d5baae"
+source = "git+https://git.corbet.ch/corbet-foss/cwlt?branch=main#06d575629d544a80c47e7184967dcff827476799"
 dependencies = [
  "acvm",
  "barretenberg-rs",
@@ -2010,7 +2010,7 @@ dependencies = [
 [[package]]
 name = "czkp"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/czkp?branch=main#20a60821a96d46d0f57b9f5de6f5e7c8b5a73a3c"
+source = "git+https://git.corbet.ch/corbet-foss/czkp?branch=main#23d8b4a17a20d69f9d538eb5841e109bc1498af3"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.6.0",
@@ -8796,7 +8796,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "veilid-core"
 version = "0.5.7"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#dd8e2cdd72b5bf817172ac31c20872b168c5c8fc"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#ebb077af88a974509f9f5c0ac9fce6bfd06988ab"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -8855,7 +8855,7 @@ dependencies = [
 [[package]]
 name = "veilid-core-optimized"
 version = "0.5.7"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#dd8e2cdd72b5bf817172ac31c20872b168c5c8fc"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#ebb077af88a974509f9f5c0ac9fce6bfd06988ab"
 dependencies = [
  "argon2",
  "blake2 0.11.0",
@@ -8884,7 +8884,7 @@ dependencies = [
 [[package]]
 name = "veilid-tools"
 version = "0.5.7"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#dd8e2cdd72b5bf817172ac31c20872b168c5c8fc"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#ebb077af88a974509f9f5c0ac9fce6bfd06988ab"
 dependencies = [
  "android_logger",
  "async-lock",
