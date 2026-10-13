@@ -95,6 +95,18 @@ pub(in crate::keys) fn fixed_record(
     evidence: &[u8],
     nonce: [u8; 24],
 ) -> Result<(cdht::Descriptor, cdht::SignedValue), Error> {
+    sequenced_record(root, lineage, evidence, nonce, 0)
+}
+
+/// The same root-owned DFLT(1) subkey zero at an explicit sequence. Genesis is sequence
+/// zero; every later lineage revision is exactly its predecessor's sequence plus one.
+pub(in crate::keys) fn sequenced_record(
+    root: &Secret,
+    lineage: &Lineage,
+    evidence: &[u8],
+    nonce: [u8; 24],
+    sequence: u32,
+) -> Result<(cdht::Descriptor, cdht::SignedValue), Error> {
     let read = inspection::lineage_secret(root, lineage)?;
     let ciphertext = crate::Vld0RecordCipher { secret: &read }.crypt(&nonce, evidence)?;
     let signer = RootSigner(root);
@@ -103,7 +115,7 @@ pub(in crate::keys) fn fixed_record(
     let value = cdht::SignedValue::sign_with_nonce(
         &descriptor.owner,
         0,
-        0,
+        sequence,
         ciphertext.to_vec(),
         Some(nonce),
         &signer,
@@ -204,6 +216,81 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             return Err(Error::Expired);
         }
         Ok(output)
+    }
+}
+
+impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
+    /// Prepare the signed next value of the member's lineage record for the pending
+    /// `DeviceAuthorized` receipt: the same root-owned DFLT(1) subkey zero, the same read
+    /// key, and sequence EXACTLY `receipt lineage revision - 1` (the genesis revision is
+    /// sequence zero), so the chain has no gaps and no reuse.
+    ///
+    /// `previous` is the verified head this revision extends. The revision must be its
+    /// strict successor (same binding, root and epoch, revision + 1, no device dropped), the
+    /// pending output must be exactly `receipt`, and the receipt's lineage must be this
+    /// checkpoint's. `Action::PublishLineage` is checked against the previous head's digest
+    /// (the chain), with `evidence` for the authority. `canonical_evidence` is the exact
+    /// packed plaintext CVLT verified. Persist the output before publishing; this grants no
+    /// normal Use and signs nothing else.
+    pub async fn prepare_lineage_revision_record(
+        &mut self,
+        receipt: &Receipt,
+        previous: &Lineage,
+        canonical_evidence: &[u8],
+        evidence: &[u8],
+    ) -> Result<cdht::SignedValue, Error> {
+        if canonical_evidence.is_empty() || canonical_evidence.len() > cdht::MAX_SUBKEY_SIZE {
+            return Err(Error::Limit);
+        }
+        self.loaded()?;
+        previous.verify()?;
+        self.check_revision(receipt, previous).await?;
+        let previous_digest = previous.digest()?;
+        self.authorize(
+            Action::PublishLineage,
+            None,
+            Some(previous_digest),
+            evidence,
+        )
+        .await?;
+        // The authority may await external work: the same pending output must still stand.
+        self.check_revision(receipt, previous).await?;
+        let mut nonce = [0; 24];
+        self.entropy.fill(&mut nonce)?;
+        let open = self.loaded()?;
+        let sequence =
+            u32::try_from(open.metadata.lineage.revision - 1).map_err(|_| Error::Limit)?;
+        let (_, value) = sequenced_record(
+            open.material.root()?,
+            &open.metadata.lineage,
+            canonical_evidence,
+            nonce,
+            sequence,
+        )?;
+        Ok(value)
+    }
+
+    async fn check_revision(&mut self, receipt: &Receipt, previous: &Lineage) -> Result<(), Error> {
+        self.refresh().await?;
+        let open = self.loaded()?;
+        let next = &open.metadata.lineage;
+        let granted = match &receipt.change {
+            Change::DeviceAuthorized(grant) => &grant.lineage,
+            _ => return Err(Error::Unauthorized),
+        };
+        if open.metadata.output.as_ref() != Some(receipt)
+            || granted != next
+            || next.binding != previous.binding
+            || next.root != previous.root
+            || next.epoch != previous.epoch
+            || next.identity != previous.identity
+            || previous.revision.checked_add(1) != Some(next.revision)
+            || next.revision < 2
+            || !previous.devices.iter().all(|d| next.devices.contains(d))
+        {
+            return Err(Error::Unauthorized);
+        }
+        Ok(())
     }
 }
 

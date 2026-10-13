@@ -171,6 +171,9 @@ pub enum Action {
     Rotate,
     /// Adopt an authenticated lineage or root update.
     Adopt,
+    /// Publish the next lineage record revision for the pending device authorization,
+    /// against a single-use admitted command and the live head the revision extends.
+    PublishLineage,
 }
 
 /// Original owner signing bytes and exclusive deadline. Input, not authority.

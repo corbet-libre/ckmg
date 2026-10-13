@@ -1710,3 +1710,136 @@ fn lineage_read_capability_is_exported_only_under_current_authority_for_the_own_
         assert!(member.export_lineage_read_capability().await.is_err());
     });
 }
+
+fn publish_consent(previous: &Lineage) -> Vec<u8> {
+    consent(
+        Action::PublishLineage,
+        &previous.binding,
+        Some(previous.root),
+        previous.epoch,
+        None,
+        Some(previous.digest().unwrap()),
+    )
+}
+
+/// Authorize `request` on `live` without acknowledging, returning the pending receipt.
+async fn approve(live: &mut Machine, request: &PairingRequest) -> Receipt {
+    live.authorize_device(
+        request,
+        &consent(
+            Action::Pair,
+            &request.binding,
+            Some(request.root),
+            request.epoch,
+            Some(request.device),
+            Some(request.digest().unwrap()),
+        ),
+    )
+    .await
+    .unwrap()
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_lineage_revision_record_is_exactly_the_next_sequence_of_the_pending_receipt_on_its_head() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 4);
+        let mut b = machine(&store, &time, &guard, 5);
+        let mut c = machine(&store, &time, &guard, 6);
+        let created = create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let genesis = a.lineage().await.unwrap();
+        let request_b = request(&mut b, &prf(2), &genesis).await;
+        let receipt = approve(&mut a, &request_b).await;
+        // The next revision is sequence 1, signed by the root writer of the genesis record.
+        let value = a
+            .prepare_lineage_revision_record(
+                &receipt,
+                &genesis,
+                b"revision-two",
+                &publish_consent(&genesis),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value.seq, 1);
+        // A different receipt, a head that is not its predecessor, and an authority
+        // statement for another head are all refused.
+        let other = created;
+        assert!(
+            a.prepare_lineage_revision_record(&other, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        let mut stale = genesis.clone();
+        stale.revision = 7;
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &stale, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        // Once the receipt is acknowledged there is nothing pending to publish: no replay.
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        // The following revision is exactly sequence 2, and only on the revision-2 head.
+        let accepted = match &receipt.change {
+            Change::DeviceAuthorized(grant) => (**grant).clone(),
+            _ => panic!(),
+        };
+        accept(&mut b, &accepted).await;
+        let second = a.lineage().await.unwrap();
+        assert_eq!(second.revision, 2);
+        let request_c = request(&mut c, &prf(3), &second).await;
+        let receipt = approve(&mut a, &request_c).await;
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        let value = a
+            .prepare_lineage_revision_record(
+                &receipt,
+                &second,
+                b"revision-three",
+                &publish_consent(&second),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value.seq, 2);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_lineage_revision_for_another_head_is_refused_by_the_authority() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 4);
+        let mut b = machine(&store, &time, &guard, 5);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let genesis = a.lineage().await.unwrap();
+        let request_b = request(&mut b, &prf(2), &genesis).await;
+        let receipt = approve(&mut a, &request_b).await;
+        let wrong = consent(
+            Action::PublishLineage,
+            &genesis.binding,
+            Some(genesis.root),
+            genesis.epoch,
+            None,
+            Some([9; 32]),
+        );
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &wrong)
+                .await
+                .is_err()
+        );
+    });
+}
