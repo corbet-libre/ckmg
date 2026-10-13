@@ -103,15 +103,12 @@ impl Clock for Time {
 pub struct Random {
     rng: rand_chacha::ChaCha20Rng,
     pub fail: Rc<Cell<bool>>,
-    /// Remaining successful draws; `usize::MAX` means unlimited.
-    pub budget: Rc<Cell<usize>>,
 }
 impl Random {
     pub fn new(seed: u8) -> Self {
         Self {
             rng: rand_chacha::ChaCha20Rng::from_seed([seed; 32]),
             fail: Rc::new(Cell::new(false)),
-            budget: Rc::new(Cell::new(usize::MAX)),
         }
     }
 }
@@ -119,13 +116,6 @@ impl Entropy for Random {
     fn fill(&mut self, bytes: &mut [u8]) -> Result<(), Error> {
         if self.fail.get() {
             return Err(Error::Randomness);
-        }
-        let left = self.budget.get();
-        if left == 0 {
-            return Err(Error::Randomness);
-        }
-        if left != usize::MAX {
-            self.budget.set(left - 1);
         }
         self.rng.fill_bytes(bytes);
         Ok(())
@@ -188,7 +178,13 @@ impl Authority for Guard {
             }
             if matches!(
                 request.action,
-                Action::Use | Action::Pair | Action::Rotate | Action::Restore
+                Action::Use
+                    | Action::UseTransport(_)
+                    | Action::LendDeviceSigner
+                    | Action::SignDeviceEd25519
+                    | Action::Pair
+                    | Action::Rotate
+                    | Action::Restore
             ) && !anchor.devices.contains(&request.device)
             {
                 return Err(Error::Revoked);
@@ -199,7 +195,13 @@ impl Authority for Guard {
         {
             return Err(Error::Unauthorized);
         }
-        if request.action != Action::Use {
+        if !matches!(
+            request.action,
+            Action::Use
+                | Action::UseTransport(_)
+                | Action::LendDeviceSigner
+                | Action::SignDeviceEd25519
+        ) {
             let evidence: [u8; 64] = request
                 .evidence
                 .try_into()

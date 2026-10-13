@@ -14,28 +14,64 @@
 //! Cryptographic custody is not proof of community membership or current eligibility.
 
 mod error;
+mod intent;
+pub use intent::{AdmittedCommand, IntentAdmission, IntentGuard, IntentVerifier, intent_channel};
+#[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
+mod browser_tor;
 mod keyring;
 mod keys;
 mod lineage;
+#[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
+pub use browser_tor::BrowserTorInitializer;
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+mod native_record;
+#[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+mod native_tor;
+#[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+pub use cvln::{
+    RecordInitializer as NativeRecordInitializer, core::DHTSchema as NativeRecordSchema,
+};
+#[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+pub use native_tor::NativeTorInitializer;
 pub mod passkey;
+/// Original internal Wallet engine types; upper Wallet uses this exact dependency instance.
+#[cfg(feature = "wallet-engine")]
+pub use cwlt_engine as wallet_engine;
+#[cfg(feature = "passport")]
+pub use passkey::HolderSeed;
+mod node_cipher;
 mod ports;
 mod purpose;
+mod record_cipher;
 mod typed;
 mod vld0;
 
+/// Exact original Envelope types used by Keys, avoiding path/git type copies.
+#[cfg(feature = "profile-envelope")]
+pub use cnvl as envelope;
 pub use error::Error;
+
 pub use keys::{
-    Change, DeviceInfo, Ed25519Signer, KeyHandle, Keys, OperationId, Receipt, RestoreRoot, State,
-    Vld0Signer,
+    AccountDeviceAuthorization, AccountDevicePlan, Change, CheckpointBootstrap,
+    CheckpointInspection, CheckpointInspector, CheckpointRecordCustody, CompletionIntent,
+    DeviceAttestation, DeviceEd25519Signer, DeviceInfo, Ed25519Signer, EnrollmentSeed,
+    InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys, LineageReadCapability,
+    LineageReadCustody, OperationId, PendingCompletion, PendingCreation, ProvisionalLineage,
+    Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation, Vld0Signer,
+    inspect_checkpoint,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
 };
+pub use node_cipher::Vld0NodeCipher;
 pub use ports::{
-    Action, Authority, Authorization, Clock, Commit, Entropy, Locator, MAX_CHECKPOINT_BYTES,
-    MAX_DEVICES, MAX_MESSAGE_BYTES, SecureStore, SystemEntropy,
+    Action, Authority, Authorization, Clock, Commit, CompletionAuthorization, DeviceSigning,
+    Entropy, GenesisAuthorization, InitialActivationAuthorization, InitialActivationIntent,
+    Locator, MAX_CHECKPOINT_BYTES, MAX_DEVICES, MAX_MESSAGE_BYTES, NodePurpose, SecureStore,
+    SystemEntropy,
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
+pub use record_cipher::{Vld0RecordCipher, Vld0RecordReader};
 pub use typed::{BEST_KIND, CryptoKind, HashDigest, PublicKey, Signature, VLD0};
 pub use vld0::{hash, validate_public_key, verify, verify_ed25519};
 
@@ -46,12 +82,10 @@ pub(crate) type Secret = zeroize::Zeroizing<[u8; 32]>;
 #[cfg(test)]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 
-// The shared test fixtures are also compiled as an integration-test support module,
-// which names this crate as `ckmg`.
 #[cfg(test)]
-extern crate self as ckmg;
+#[path = "../tests/unit/veilid_reference.rs"]
+mod veilid_reference_tests;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
-mod veilid_reference_tests;
+#[path = "../tests/unit/profiling.rs"]
+mod profiling;

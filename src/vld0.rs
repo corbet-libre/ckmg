@@ -16,7 +16,26 @@ use zeroize::{Zeroize, Zeroizing};
 const VLD0_DOMAIN_SIGN: &[u8] = b"VLD0_SIGN";
 const HPKE_INFO: &[u8] = b"veilid-hpke/1VLD0";
 const HPKE_HEADER: &[u8] = b"\x01VLD0";
-pub(crate) const SEALED_ROOT_BYTES: usize = 5 + 32 + 32 + 16;
+pub(crate) fn sealed_root_bytes(version: u8) -> Result<usize, Error> {
+    match version {
+        1 => Ok(5 + 32 + 32 + 16),
+        2 => Ok(5 + 32 + 64 + 16),
+        _ => Err(Error::Encoding),
+    }
+}
+pub(crate) fn validate_sealed_root(version: u8, length: usize) -> Result<(), Error> {
+    if version == 3 {
+        let plain = length.checked_sub(5 + 32 + 16).ok_or(Error::Encoding)?;
+        if plain <= crate::MAX_CHECKPOINT_BYTES
+            && ((plain >= 73 && (plain - 33) % 40 == 0) || (plain >= 105 && (plain - 65) % 40 == 0))
+        {
+            return Ok(());
+        }
+    } else if sealed_root_bytes(version)? == length {
+        return Ok(());
+    }
+    Err(Error::Encoding)
+}
 const HPKE_ENC_LENGTH: usize = 32;
 
 type Kem = hpke::kem::X25519HkdfSha256;
@@ -47,7 +66,7 @@ fn prehash(data: &[u8]) -> Sha512 {
 pub(crate) fn sign(secret: &Secret, data: &[u8]) -> Result<Signature, Error> {
     let signature = SigningKey::from_bytes(secret)
         .sign_prehashed(prehash(data), Some(VLD0_DOMAIN_SIGN))
-        .map_err(crate::error::redact(Error::Crypto))?;
+        .map_err(|_| Error::Crypto)?;
     Ok(Signature::new(VLD0, signature.to_bytes()))
 }
 
@@ -55,8 +74,7 @@ fn verifying_key(key: &PublicKey) -> Result<VerifyingKey, Error> {
     if key.kind() != VLD0 {
         return Err(Error::UnsupportedKind);
     }
-    let verifying =
-        VerifyingKey::from_bytes(key.value()).map_err(crate::error::redact(Error::InvalidKey))?;
+    let verifying = VerifyingKey::from_bytes(key.value()).map_err(|_| Error::InvalidKey)?;
     if verifying.is_weak() {
         return Err(Error::InvalidKey);
     }
@@ -71,7 +89,7 @@ pub fn verify(key: &PublicKey, data: &[u8], signature: &Signature) -> Result<(),
     let signature = ed25519_dalek::Signature::from_bytes(signature.value());
     verifying_key(key)?
         .verify_prehashed_strict(prehash(data), Some(VLD0_DOMAIN_SIGN), &signature)
-        .map_err(crate::error::redact(Error::BadSignature))
+        .map_err(|_| Error::BadSignature)
 }
 
 /// Check that `key` is a usable VLD0 public key (on the curve, not weak).
@@ -86,14 +104,13 @@ pub fn verify_ed25519(
     data: &[u8],
     signature: &[u8; 64],
 ) -> Result<(), Error> {
-    let verifying =
-        VerifyingKey::from_bytes(public_key).map_err(crate::error::redact(Error::InvalidKey))?;
+    let verifying = VerifyingKey::from_bytes(public_key).map_err(|_| Error::InvalidKey)?;
     if verifying.is_weak() {
         return Err(Error::InvalidKey);
     }
     verifying
         .verify_strict(data, &ed25519_dalek::Signature::from_bytes(signature))
-        .map_err(crate::error::redact(Error::BadSignature))
+        .map_err(|_| Error::BadSignature)
 }
 
 /// VLD0 `generate_hash`: BLAKE3.
@@ -101,13 +118,13 @@ pub fn hash(data: &[u8]) -> HashDigest {
     HashDigest::new(VLD0, *blake3::hash(data).as_bytes())
 }
 
-fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
+pub(crate) fn x25519_public(key: &PublicKey) -> Result<[u8; 32], Error> {
     Ok(verifying_key(key)?.to_montgomery().to_bytes())
 }
 
 /// The X25519 secret an Ed25519 seed expands to: the raw first half of SHA-512(seed),
 /// clamped by X25519 itself (as in Veilid; not the reduced scalar).
-fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
+pub(crate) fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
     let mut expanded: [u8; 64] = Sha512::new()
         .chain_update(secret.as_slice())
         .finalize()
@@ -116,6 +133,23 @@ fn x25519_secret(secret: &Secret) -> Zeroizing<[u8; 32]> {
     out.copy_from_slice(&expanded[..32]);
     expanded.zeroize();
     out
+}
+
+/// Original VLD0 node DH: Ed25519 conversion, contributory X25519, then
+/// BLAKE3("VLD0_CRYPT" || shared). Matches Veilid dd8e2cd's compute_dh.
+/// Both the raw agreement and its hash stay inside custody and wipe on drop.
+pub(crate) fn compute_dh(secret: &Secret, peer: &PublicKey) -> Result<Secret, Error> {
+    let public = x25519_dalek::PublicKey::from(x25519_public(peer)?);
+    let private = x25519_dalek::StaticSecret::from(*x25519_secret(secret));
+    let shared = private.diffie_hellman(&public);
+    if !shared.was_contributory() {
+        return Err(Error::InvalidKey);
+    }
+    let mut hasher = Zeroizing::new(blake3::Hasher::new());
+    hasher.update(b"VLD0_CRYPT");
+    hasher.update(shared.as_bytes());
+    let digest = Zeroizing::new(hasher.finalize());
+    Ok(Zeroizing::new(*digest.as_bytes()))
 }
 
 /// Seal `plaintext` to the holder of `recipient` (HPKE base mode).
@@ -127,7 +161,7 @@ pub(crate) fn seal_to(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, Error> {
     let recipient = <Kem as hpke::Kem>::PublicKey::from_bytes(&x25519_public(recipient)?)
-        .map_err(crate::error::redact(Error::InvalidKey))?;
+        .map_err(|_| Error::InvalidKey)?;
     let (enc, ciphertext) = hpke::single_shot_seal_with_rng::<Aead, Kdf, Kem>(
         &OpModeS::Base,
         &recipient,
@@ -136,7 +170,7 @@ pub(crate) fn seal_to(
         associated_data,
         &mut rand_chacha::ChaCha20Rng::from_seed(*random_secret(rng)?),
     )
-    .map_err(crate::error::redact(Error::Crypto))?;
+    .map_err(|_| Error::Crypto)?;
     let enc = enc.to_bytes();
     let mut out = Vec::with_capacity(5 + HPKE_ENC_LENGTH + ciphertext.len());
     out.extend_from_slice(HPKE_HEADER);
@@ -158,9 +192,9 @@ pub(crate) fn open(
         return Err(Error::UnsupportedKind);
     }
     let enc = <Kem as hpke::Kem>::EncappedKey::from_bytes(&sealed[5..5 + HPKE_ENC_LENGTH])
-        .map_err(crate::error::redact(Error::Open))?;
+        .map_err(|_| Error::Open)?;
     let private = <Kem as hpke::Kem>::PrivateKey::from_bytes(x25519_secret(secret).as_slice())
-        .map_err(crate::error::redact(Error::Crypto))?;
+        .map_err(|_| Error::Crypto)?;
     hpke::single_shot_open::<Aead, Kdf, Kem>(
         &OpModeR::Base,
         &private,
@@ -170,7 +204,7 @@ pub(crate) fn open(
         associated_data,
     )
     .map(Zeroizing::new)
-    .map_err(crate::error::redact(Error::Open))
+    .map_err(|_| Error::Open)
 }
 
 /// Plain Ed25519 for owner formats (COSE/OpenMLS/cgrd) that do not use Ed25519ph.

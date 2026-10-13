@@ -25,20 +25,6 @@ def check(report):
     if lines == 0:
         raise ValueError('Empty line coverage cannot pass')
     if failures:
-        for unit in report['data']:
-            for entry in unit.get('files', []):
-                summary = entry.get('summary', {})
-                missed = {m: summary[m]['count'] - summary[m]['covered'] for m in ('lines', 'branches') if m in summary}
-                if any(missed.values()):
-                    by_line = {}
-                    for seg in entry.get('segments', []):
-                        if len(seg) > 4 and seg[3]:
-                            by_line[seg[0]] = max(by_line.get(seg[0], 0), seg[2])
-                    zero = sorted(line for line, count in by_line.items() if count == 0)
-                    print(f"zero-count regions {entry.get('filename')}: lines {zero}")
-                    arms = [(b[0], b[4], b[5]) for b in entry.get('branches', []) if len(b) > 5 and (b[4] == 0 or b[5] == 0)]
-                    print(f"zero-count branch arms {entry.get('filename')}: (line, true, false) {arms}")
-                    print(f"uncovered {entry.get('filename')}: lines {missed.get('lines', 0)}, branches {missed.get('branches', 0)}")
         raise ValueError('; '.join(failures))
 
 

@@ -158,7 +158,7 @@ fn veilid_hpke_header_conversion_info_and_cross_open_conformance() {
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn veilid_rfc9180_a2_fixture_uses_the_selected_upstream_suite() {
     let fixture: serde_json::Value =
-        serde_json::from_str(include_str!("../tests/fixtures/rfc9180_a2_base.json")).unwrap();
+        serde_json::from_str(include_str!("../fixtures/rfc9180_a2_base.json")).unwrap();
     let field = |name: &str| decode(fixture[name].as_str().unwrap());
     let (private, public) = Kem::derive_keypair(&field("ikmR"));
     assert_eq!(private.to_bytes().as_slice(), field("skRm"));

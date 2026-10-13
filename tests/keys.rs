@@ -45,6 +45,47 @@ fn restore_is_identity_preserving_and_never_implicitly_creates() {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_passkey_does_not_determine_the_common_identity_root() {
+    block_on(async {
+        // Separate initial enrollments demonstrate the entropy input. An existing
+        // membership's authority would reject creating either replacement.
+        let left_store = Memory::default();
+        let right_store = Memory::default();
+        let left_guard = Guard::default();
+        let right_guard = Guard::default();
+        let time = Time::default();
+        let mut left = machine(&left_store, &time, &left_guard, 81);
+        let mut right = machine(&right_store, &time, &right_guard, 82);
+        create(&mut left, &left_guard, &prf(1), &binding("a")).await;
+        create(&mut right, &right_guard, &prf(1), &binding("a")).await;
+        let first = left.lineage().await.unwrap();
+        let second = right.lineage().await.unwrap();
+        assert_eq!(first.devices, second.devices);
+        assert_ne!(first.root, second.root);
+        assert_ne!(first.identity, second.identity);
+        let left_identity = left
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
+        let right_identity = right
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
+        assert_ne!(left_identity, right_identity);
+        left.lock();
+        left.unlock(&prf(1), "a").await.unwrap();
+        assert_eq!(
+            left.with_identity(|identity| identity.public_key())
+                .await
+                .unwrap(),
+            left_identity
+        );
+        assert_eq!(left.lineage().await.unwrap(), first);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
 fn signatures_and_encryption_bind_community_purpose_device_and_epoch() {
     block_on(async {
         let store = Memory::default();
@@ -219,6 +260,140 @@ fn rotation_is_atomic_preserves_pseudonym_and_denies_revoked_and_stale_keys() {
         b.lock();
         b.unlock(&prf(2), "a").await.unwrap();
         assert_eq!(b.state(), State::Revoked);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn historical_opening_survives_two_rotations_pairing_and_same_passkey_restart() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 111);
+        let mut b = machine(&store, &time, &guard, 112);
+        let mut c = machine(&store, &time, &guard, 113);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let identity = a
+            .with_identity(|identity| identity.public_key())
+            .await
+            .unwrap();
+        let first = a.key(purpose(Scope::Member, "history")).await.unwrap();
+        let ciphertext = a
+            .seal(&first, b"accepted-history", b"epoch one history")
+            .await
+            .unwrap();
+        let record = a
+            .with_vld0_record_cipher(&first, |cipher| {
+                cipher.crypt(&[17; 24], b"signed historical record")
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        let grant = pair(&mut a, &mut b, &guard, &prf(2)).await;
+        prepare(&mut a, grant.request.device).await;
+        let receipt = a.commit().await.unwrap().unwrap();
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        let second = a.key(purpose(Scope::Member, "history")).await.unwrap();
+        assert!(
+            a.open(&second, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            a.open_historical(&first, 1, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            &*a.open_historical(&second, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
+        let ciphertext_two = a
+            .seal(&second, b"accepted-history", b"epoch two history")
+            .await
+            .unwrap();
+        let grant = pair(&mut a, &mut c, &guard, &prf(3)).await;
+        assert_eq!(grant.version, 3);
+        let paired = c.key(purpose(Scope::Member, "history")).await.unwrap();
+        assert_eq!(
+            &*c.open_historical(&paired, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
+        prepare(&mut a, grant.request.device).await;
+        let receipt = a.commit().await.unwrap().unwrap();
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        a.lock();
+        let mut restored = machine(&store, &time, &guard, 114);
+        restored.unlock(&prf(1), "a").await.unwrap();
+        assert_eq!(
+            restored
+                .with_identity(|identity| identity.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
+        let current = restored
+            .key(purpose(Scope::Member, "history"))
+            .await
+            .unwrap();
+        assert_eq!(
+            &*restored
+                .open_historical(&current, 1, b"accepted-history", &ciphertext)
+                .await
+                .unwrap(),
+            b"epoch one history"
+        );
+        assert_eq!(
+            &*restored
+                .open_historical(&current, 2, b"accepted-history", &ciphertext_two)
+                .await
+                .unwrap(),
+            b"epoch two history"
+        );
+        assert_eq!(
+            &*restored
+                .with_historical_vld0_reader(&current, 1, |reader| reader.open(&[17; 24], &record))
+                .await
+                .unwrap()
+                .unwrap(),
+            b"signed historical record"
+        );
+        assert!(
+            restored
+                .open_historical(&current, 0, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 4, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 2, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            restored
+                .open_historical(&current, 1, b"other-history", &ciphertext)
+                .await
+                .is_err()
+        );
+        assert!(
+            c.open_historical(&paired, 1, b"accepted-history", &ciphertext)
+                .await
+                .is_err()
+        );
     });
 }
 
@@ -593,7 +768,7 @@ fn restore_consent(anchor: &Lineage) -> Vec<u8> {
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
-fn lost_vault_rederives_the_exact_identity_device_and_member_keys() {
+fn retained_encrypted_vault_restores_the_exact_identity_device_and_member_keys() {
     block_on(async {
         let store = Memory::default();
         let time = Time::default();
@@ -627,18 +802,22 @@ fn lost_vault_rederives_the_exact_identity_device_and_member_keys() {
                 .unwrap_err(),
             Error::Unauthorized
         );
-        let receipt = phone
-            .restore_scope(
-                &prf(1),
-                &lineage,
-                RestoreRoot::Derived,
-                info(),
-                &restore_consent(&lineage),
-            )
-            .await
-            .unwrap();
-        assert!(matches!(receipt.change, Change::Restored(_)));
-        phone.acknowledge(receipt.operation).await.unwrap();
+        assert_eq!(
+            phone
+                .restore_scope(
+                    &prf(1),
+                    &lineage,
+                    RestoreRoot::Derived,
+                    info(),
+                    &restore_consent(&lineage),
+                )
+                .await
+                .unwrap_err(),
+            Error::MissingCheckpoint,
+        );
+        // The member's retained encrypted records, never an operator root copy.
+        empty.0.borrow_mut().records = store.0.borrow().records.clone();
+        phone.unlock(&prf(1), "a").await.unwrap();
         assert_eq!(phone.lineage().await.unwrap(), lineage);
         let restored_member = phone.key(purpose(Scope::Member, "records")).await.unwrap();
         let restored_device = phone.key(purpose(Scope::Device, "mls")).await.unwrap();
@@ -761,6 +940,11 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
         let mut c = machine(&store, &time, &guard, 37);
         create(&mut a, &guard, &prf(1), &binding("a")).await;
         let grant = pair(&mut a, &mut b, &guard, &prf(2)).await;
+        let identity = a.with_identity(|roots| roots.public_key()).await.unwrap();
+        assert_eq!(
+            b.with_identity(|roots| roots.public_key()).await.unwrap(),
+            identity
+        );
         let anchor = a.lineage().await.unwrap();
         time.0.set(1400); // The original pairing challenge has expired.
         let empty = Memory::default();
@@ -776,7 +960,7 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
                 )
                 .await
                 .unwrap_err(),
-            Error::Unauthorized
+            Error::MissingCheckpoint
         );
         let mut damaged = grant.clone();
         damaged.sealed_root[40] ^= 1;
@@ -804,6 +988,22 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         phone.acknowledge(receipt.operation).await.unwrap();
         assert_eq!(phone.lineage().await.unwrap(), anchor);
+        assert_eq!(
+            phone
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
+        phone.lock();
+        phone.unlock(&prf(2), "a").await.unwrap();
+        assert_eq!(
+            phone
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
         let third = pair(&mut a, &mut c, &guard, &prf(3)).await;
         prepare(&mut a, third.request.device).await;
         let receipt = a.commit().await.unwrap().unwrap();
@@ -811,13 +1011,13 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
         a.acknowledge(receipt.operation).await.unwrap();
         let rotation = rotation(&receipt);
         let anchor = &rotation.lineage;
-        // The rotating credential regenerates the current root without a transfer.
+        // The initiator needs its retained envelope exactly like every other survivor.
         let mut owner = machine(&Memory::default(), &time, &guard, 39);
         let restored = owner
             .restore_scope(
                 &prf(1),
                 anchor,
-                RestoreRoot::Derived,
+                RestoreRoot::Rotated(rotation),
                 info(),
                 &restore_consent(anchor),
             )
@@ -840,6 +1040,20 @@ fn paired_and_rotated_custody_restore_from_prf_and_authenticated_transfers() {
             .unwrap();
         survivor.acknowledge(restored.operation).await.unwrap();
         assert_eq!(survivor.lineage().await.unwrap(), *anchor);
+        assert_eq!(
+            owner
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
+        assert_eq!(
+            survivor
+                .with_identity(|roots| roots.public_key())
+                .await
+                .unwrap(),
+            identity
+        );
         let mut removed = machine(&Memory::default(), &time, &guard, 41);
         assert_eq!(
             removed
@@ -878,6 +1092,8 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
         let guard = Guard::default();
         let mut old = machine(&Memory::default(), &time, &guard, 42);
         create(&mut old, &guard, &prf(1), &binding("a")).await;
+        let mut paired = machine(&Memory::default(), &time, &guard, 44);
+        let grant = pair(&mut old, &mut paired, &guard, &prf(2)).await;
         let anchor = old.lineage().await.unwrap();
         let store = Memory::default();
         store.0.borrow_mut().fault = Fault::After;
@@ -885,9 +1101,9 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
         assert_eq!(
             phone
                 .restore_scope(
-                    &prf(1),
+                    &prf(2),
                     &anchor,
-                    RestoreRoot::Derived,
+                    RestoreRoot::Paired(&grant),
                     info(),
                     &restore_consent(&anchor)
                 )
@@ -896,11 +1112,11 @@ fn lost_restore_reply_replays_the_same_committed_receipt() {
             Error::Reconcile
         );
         store.0.borrow_mut().fault = Fault::None;
-        phone.unlock(&prf(1), "a").await.unwrap();
+        phone.unlock(&prf(2), "a").await.unwrap();
         let receipt = phone.pending_output().await.unwrap().unwrap();
         assert_eq!(receipt.change, Change::Restored(anchor));
         phone.lock();
-        phone.unlock(&prf(1), "a").await.unwrap();
+        phone.unlock(&prf(2), "a").await.unwrap();
         assert_eq!(phone.pending_output().await.unwrap(), Some(receipt));
     });
 }
@@ -1002,6 +1218,28 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         .unwrap();
         assert_ne!(actual, vld0);
         assert!(verify_ed25519(&public, b"OpenMLS transcript", &vld0).is_err());
+        let lineage = keys.lineage().await.unwrap();
+        let (device, proof) = keys
+            .with_device_ed25519_signer(|signer| {
+                let public = *signer.public_key();
+                assert_eq!(
+                    signer.hpke_public_key().unwrap(),
+                    ed25519_dalek::VerifyingKey::from_bytes(&public)
+                        .unwrap()
+                        .to_montgomery()
+                        .to_bytes()
+                );
+                assert_eq!(
+                    signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
+                (public, signer.sign(b"original profile transcript").unwrap())
+            })
+            .await
+            .unwrap();
+        assert!(lineage.devices.contains(&PublicKey::new(VLD0, device)));
+        assert_ne!(device, public);
+        verify_ed25519(&device, b"original profile transcript", &proof).unwrap();
         guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
         let called = std::cell::Cell::new(false);
         assert!(
@@ -1011,5 +1249,597 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         );
         assert!(!called.get());
         assert_eq!(keys.state(), State::Revoked);
+        assert!(
+            keys.with_device_ed25519_signer(|_| called.set(true))
+                .await
+                .is_err()
+        );
+        assert!(!called.get());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_cipher_restores_exact_bytes_without_exporting_read_keys() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut keys = machine(&store, &time, &guard, 94);
+        create(&mut keys, &guard, &prf(1), &binding("a")).await;
+        let handle = keys.key(purpose(Scope::Member, "records")).await.unwrap();
+        let nonce = [21; 24];
+        let ciphertext = keys
+            .with_vld0_record_cipher(&handle, |cipher| {
+                assert_eq!(
+                    cipher.crypt(&nonce, &vec![0; MAX_MESSAGE_BYTES + 1]),
+                    Err(Error::Limit)
+                );
+                assert!(cipher.crypt(&nonce, &[]).unwrap().is_empty());
+                cipher.crypt(&nonce, b"padded original record").unwrap()
+            })
+            .await
+            .unwrap();
+        assert_ne!(&*ciphertext, b"padded original record");
+        let wrong = keys
+            .key(purpose(Scope::Member, "other-record"))
+            .await
+            .unwrap();
+        let other = keys
+            .with_vld0_record_cipher(&wrong, |cipher| cipher.crypt(&nonce, &ciphertext))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_ne!(&*other, b"padded original record");
+        keys.lock();
+        keys.unlock(&prf(1), "a").await.unwrap();
+        let restored = keys.key(purpose(Scope::Member, "records")).await.unwrap();
+        let opened = keys
+            .with_vld0_record_cipher(&restored, |cipher| cipher.crypt(&nonce, &ciphertext))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(&*opened, b"padded original record");
+        guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
+        let called = std::cell::Cell::new(false);
+        assert!(
+            keys.with_vld0_record_cipher(&restored, |_| called.set(true))
+                .await
+                .is_err()
+        );
+        assert!(!called.get());
+    });
+}
+
+// Link the maintained profiler only into instrumented test binaries.
+#[cfg(all(target_arch = "wasm32", owned_browser_coverage))]
+#[wasm_bindgen_test::wasm_bindgen_test]
+fn profiling_runtime_is_linked() {
+    let _ = browser_coverage_runtime::__owned_test_module_signature();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn initial_passkey_restores_only_from_its_retained_wrapped_random_root() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut owner = machine(&store, &time, &guard, 141);
+        create(&mut owner, &guard, &prf(1), &binding("garden")).await;
+        let anchor = owner.lineage().await.unwrap();
+        let purpose = purpose(Scope::Member, "history");
+        let original = owner.key(purpose.clone()).await.unwrap();
+        let ciphertext = owner
+            .seal(&original, b"retained history", b"surviving content")
+            .await
+            .unwrap();
+        let public = original.certificate().key;
+        let retained = owner.retained_checkpoint().await.unwrap();
+        owner.lock();
+        store.0.borrow_mut().records.clear(); // No old device or local data remains.
+        let empty = Memory::default();
+        for bad in [vec![], vec![0; MAX_CHECKPOINT_BYTES + 1], {
+            let mut changed = retained.clone();
+            let last = changed.len() - 1;
+            changed[last] ^= 1;
+            changed
+        }] {
+            let mut phone = machine(&empty, &time, &guard, 142);
+            assert!(
+                phone
+                    .restore_scope(
+                        &prf(1),
+                        &anchor,
+                        RestoreRoot::Checkpoint(&bad),
+                        info(),
+                        &restore_consent(&anchor)
+                    )
+                    .await
+                    .is_err()
+            );
+            assert_eq!(empty.0.borrow().writes, 0);
+        }
+        let mut phone = machine(&empty, &time, &guard, 143);
+        assert!(
+            phone
+                .restore_scope(
+                    &prf(2),
+                    &anchor,
+                    RestoreRoot::Checkpoint(&retained),
+                    info(),
+                    &restore_consent(&anchor)
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(empty.0.borrow().writes, 0);
+        let receipt = phone
+            .restore_scope(
+                &prf(1),
+                &anchor,
+                RestoreRoot::Checkpoint(&retained),
+                info(),
+                &restore_consent(&anchor),
+            )
+            .await
+            .unwrap();
+        guard.publish(&receipt);
+        phone.acknowledge(receipt.operation).await.unwrap();
+        let restored = phone.key(purpose).await.unwrap();
+        assert_eq!(restored.certificate().key, public);
+        assert_eq!(
+            &*phone
+                .open(&restored, b"retained history", &ciphertext)
+                .await
+                .unwrap(),
+            b"surviving content"
+        );
+        assert!(receipt.attested_lineage().is_ok());
+        phone.lock();
+        assert!(phone.retained_checkpoint().await.is_err());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn node_signer_and_cipher_share_the_actual_device_purpose_across_pairing_and_restore() {
+    block_on(async {
+        let left_store = Memory::default();
+        let right_store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut left = machine(&left_store, &time, &guard, 151);
+        let mut right = machine(&right_store, &time, &guard, 152);
+        create(&mut left, &guard, &prf(1), &binding("a")).await;
+        pair(&mut left, &mut right, &guard, &prf(2)).await;
+        let left_handle = left.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let right_handle = right.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let left_public = *left_handle.certificate().key.value();
+        let right_public = *right_handle.certificate().key.value();
+        assert_ne!(left_public, right_public);
+        let nonce = [53; 24];
+        let plaintext = b"original node operation bytes";
+        let (ciphertext, signature) = left
+            .with_vld0_node(&left_handle, |signer, cipher| {
+                assert_eq!(signer.public_key(), &left_public);
+                assert_eq!(cipher.public_key(), signer.public_key());
+                let ciphertext = cipher.crypt(&right_public, &nonce, plaintext).unwrap();
+                let signature = signer.sign(&ciphertext).unwrap();
+                (ciphertext, signature)
+            })
+            .await
+            .unwrap();
+        verify(
+            &PublicKey::new(VLD0, left_public),
+            &ciphertext,
+            &Signature::new(VLD0, signature),
+        )
+        .unwrap();
+        assert!(
+            verify(
+                &PublicKey::new(VLD0, right_public),
+                &ciphertext,
+                &Signature::new(VLD0, signature),
+            )
+            .is_err()
+        );
+        let opened = right
+            .with_vld0_node(&right_handle, |signer, cipher| {
+                assert_eq!(signer.public_key(), &right_public);
+                assert_eq!(cipher.public_key(), signer.public_key());
+                cipher.crypt(&left_public, &nonce, &ciphertext).unwrap()
+            })
+            .await
+            .unwrap();
+        assert_eq!(&*opened, plaintext);
+
+        // Output alone survives the callback; restoring custody preserves the
+        // node identity while requiring a freshly issued session handle.
+        right.lock();
+        right.unlock(&prf(2), "a").await.unwrap();
+        let restored = right.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        assert_eq!(*restored.certificate().key.value(), right_public);
+        assert_eq!(
+            &*right
+                .with_vld0_node(&restored, |_, cipher| {
+                    cipher.crypt(&left_public, &nonce, &ciphertext).unwrap()
+                })
+                .await
+                .unwrap(),
+            plaintext
+        );
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn node_capability_rejects_member_scope_other_community_and_stale_session_before_callback() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut keys = machine(&store, &time, &guard, 153);
+        let mut other = machine(&store, &time, &guard, 154);
+        create(&mut keys, &guard, &prf(1), &binding("a")).await;
+        create(&mut other, &guard, &prf(2), &binding("b")).await;
+        let member = keys.key(purpose(Scope::Member, "tor.node")).await.unwrap();
+        let node = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let foreign = other.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let called = std::cell::Cell::new(false);
+        for forbidden in [&member, &foreign] {
+            assert_eq!(
+                keys.with_vld0_node(forbidden, |_, _| called.set(true))
+                    .await,
+                Err(Error::Unauthorized)
+            );
+            assert!(!called.get());
+        }
+        keys.lock();
+        assert_eq!(
+            keys.with_vld0_node(&node, |_, _| called.set(true)).await,
+            Err(Error::Locked)
+        );
+        assert!(!called.get());
+        keys.unlock(&prf(1), "a").await.unwrap();
+        assert_eq!(
+            keys.with_vld0_node(&node, |_, _| called.set(true)).await,
+            Err(Error::Unauthorized)
+        );
+        assert!(!called.get());
+        let restored = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        assert_eq!(restored.certificate().key, node.certificate().key);
+        keys.with_vld0_node(&restored, |_, _| called.set(true))
+            .await
+            .unwrap();
+        assert!(called.get());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn node_capability_rechecks_actual_rotation_and_revocation_before_callback() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut owner = machine(&store, &time, &guard, 155);
+        let mut removed = machine(&store, &time, &guard, 156);
+        create(&mut owner, &guard, &prf(1), &binding("a")).await;
+        let grant = pair(&mut owner, &mut removed, &guard, &prf(2)).await;
+        let previous = owner.lineage().await.unwrap();
+        let owner_handle = owner.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let removed_handle = removed
+            .key(purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
+        let called = std::cell::Cell::new(false);
+        assert_eq!(
+            owner
+                .with_vld0_node(&removed_handle, |_, _| called.set(true))
+                .await,
+            Err(Error::Unauthorized)
+        );
+        assert!(!called.get());
+        prepare(&mut owner, grant.request.device).await;
+        assert_eq!(
+            owner
+                .with_vld0_node(&owner_handle, |_, _| called.set(true))
+                .await,
+            Err(Error::Pending)
+        );
+        assert!(!called.get());
+        let receipt = owner.commit().await.unwrap().unwrap();
+        rotation(&receipt).verify(&previous).unwrap();
+        guard.publish(&receipt);
+        owner.acknowledge(receipt.operation).await.unwrap();
+        assert!(
+            owner
+                .with_vld0_node(&owner_handle, |_, _| called.set(true))
+                .await
+                .is_err()
+        );
+        assert!(!called.get());
+
+        // No rotation has yet been applied to this device's encrypted store.
+        // The published, verified current lineage alone must fence its old key.
+        assert_eq!(
+            removed
+                .with_vld0_node(&removed_handle, |_, _| called.set(true))
+                .await,
+            Err(Error::Unauthorized)
+        );
+        assert!(!called.get());
+        assert_eq!(removed.state(), State::Locked);
+        removed.unlock(&prf(2), "a").await.unwrap();
+        let applied = removed
+            .apply_rotation(rotation(&receipt), &adoption(rotation(&receipt)))
+            .await
+            .unwrap();
+        removed.acknowledge(applied.operation).await.unwrap();
+        assert_eq!(removed.state(), State::Revoked);
+        assert_eq!(
+            removed
+                .with_vld0_node(&removed_handle, |_, _| called.set(true))
+                .await,
+            Err(Error::Revoked)
+        );
+        assert!(!called.get());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn node_capability_fails_closed_on_store_loss_and_clock_regression_before_callback() {
+    block_on(async {
+        for lose_store in [true, false] {
+            let store = Memory::default();
+            let time = Time::default();
+            let guard = Guard::default();
+            let mut keys = machine(&store, &time, &guard, 157);
+            create(&mut keys, &guard, &prf(1), &binding("a")).await;
+            let handle = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+            let expected = if lose_store {
+                store.0.borrow_mut().read_failure = true;
+                Error::Unavailable
+            } else {
+                time.0.set(999);
+                Error::Clock
+            };
+            let called = std::cell::Cell::new(false);
+            assert_eq!(
+                keys.with_vld0_node(&handle, |_, _| called.set(true)).await,
+                Err(expected)
+            );
+            assert!(!called.get());
+            assert_eq!(keys.state(), State::Locked);
+        }
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn combined_record_capability_preserves_original_domains_and_rechecks_authority() {
+    block_on(async {
+        for scope in [Scope::Member, Scope::Device] {
+            let store = Memory::default();
+            let time = Time::default();
+            let guard = Guard::default();
+            let mut keys = machine(&store, &time, &guard, 158);
+            create(&mut keys, &guard, &prf(1), &binding("a")).await;
+            let handle = keys.key(purpose(scope, "records")).await.unwrap();
+            let public = handle.certificate().key;
+            let nonce = [59; 24];
+            let plaintext = b"original encrypted record subkey bytes";
+            let expected_ciphertext = keys
+                .with_vld0_record_cipher(&handle, |cipher| cipher.crypt(&nonce, plaintext).unwrap())
+                .await
+                .unwrap();
+            let expected_signature = keys
+                .with_vld0_signer(&handle, |signer| signer.sign(&expected_ciphertext).unwrap())
+                .await
+                .unwrap();
+            let (ciphertext, signature) = keys
+                .with_vld0_record(&handle, |signer, cipher| {
+                    assert_eq!(signer.public_key(), public.value());
+                    let ciphertext = cipher.crypt(&nonce, plaintext).unwrap();
+                    let signature = signer.sign(&ciphertext).unwrap();
+                    (ciphertext, signature)
+                })
+                .await
+                .unwrap();
+            assert_eq!(ciphertext, expected_ciphertext);
+            assert_eq!(signature, expected_signature);
+            verify(&public, &ciphertext, &Signature::new(VLD0, signature)).unwrap();
+            assert_eq!(
+                &*keys
+                    .with_vld0_record_cipher(&handle, |cipher| cipher
+                        .crypt(&nonce, &ciphertext)
+                        .unwrap())
+                    .await
+                    .unwrap(),
+                plaintext
+            );
+            let called = std::cell::Cell::new(false);
+            keys.lock();
+            assert_eq!(
+                keys.with_vld0_record(&handle, |_, _| called.set(true))
+                    .await,
+                Err(Error::Locked)
+            );
+            assert!(!called.get());
+            keys.unlock(&prf(1), "a").await.unwrap();
+            let restored = keys.key(purpose(scope, "records")).await.unwrap();
+            guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
+            assert_eq!(
+                keys.with_vld0_record(&restored, |_, _| called.set(true))
+                    .await,
+                Err(Error::Revoked)
+            );
+            assert!(!called.get());
+            assert_eq!(keys.state(), State::Revoked);
+        }
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn lineage_read_capability_is_exported_only_under_current_authority_for_the_own_record() {
+    block_on(async {
+        let time = Time::default();
+        let (guard, other_guard) = (Guard::default(), Guard::default());
+        let mut member = machine(&Memory::default(), &time, &guard, 91);
+        let mut other = machine(&Memory::default(), &time, &other_guard, 92);
+        create(&mut member, &guard, &prf(1), &binding("a")).await;
+        create(&mut other, &other_guard, &prf(2), &binding("a")).await;
+        let lineage = member.lineage().await.unwrap();
+        let capability = member.export_lineage_read_capability().await.unwrap();
+        let reader =
+            LineageReadCustody::from_capability(capability.as_bytes(), &lineage.binding).unwrap();
+        assert_eq!(reader.owner(), lineage.root);
+        // Stable across a lock and unlock, and never another member's record.
+        member.lock();
+        assert!(member.export_lineage_read_capability().await.is_err());
+        member.unlock(&prf(1), "a").await.unwrap();
+        let again = member.export_lineage_read_capability().await.unwrap();
+        assert_eq!(again.as_bytes(), capability.as_bytes());
+        let theirs = other.export_lineage_read_capability().await.unwrap();
+        assert_ne!(theirs.as_bytes(), capability.as_bytes());
+        // Revocation of the live device refuses further export.
+        guard.0.borrow_mut().clear();
+        assert!(member.export_lineage_read_capability().await.is_err());
+    });
+}
+
+fn publish_consent(previous: &Lineage) -> Vec<u8> {
+    consent(
+        Action::PublishLineage,
+        &previous.binding,
+        Some(previous.root),
+        previous.epoch,
+        None,
+        Some(previous.digest().unwrap()),
+    )
+}
+
+/// Authorize `request` on `live` without acknowledging, returning the pending receipt.
+async fn approve(live: &mut Machine, request: &PairingRequest) -> Receipt {
+    live.authorize_device(
+        request,
+        &consent(
+            Action::Pair,
+            &request.binding,
+            Some(request.root),
+            request.epoch,
+            Some(request.device),
+            Some(request.digest().unwrap()),
+        ),
+    )
+    .await
+    .unwrap()
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_lineage_revision_record_is_exactly_the_next_sequence_of_the_pending_receipt_on_its_head() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 4);
+        let mut b = machine(&store, &time, &guard, 5);
+        let mut c = machine(&store, &time, &guard, 6);
+        let created = create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let genesis = a.lineage().await.unwrap();
+        let request_b = request(&mut b, &prf(2), &genesis).await;
+        let receipt = approve(&mut a, &request_b).await;
+        // The next revision is sequence 1, signed by the root writer of the genesis record.
+        let value = a
+            .prepare_lineage_revision_record(
+                &receipt,
+                &genesis,
+                b"revision-two",
+                &publish_consent(&genesis),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value.seq, 1);
+        // A different receipt, a head that is not its predecessor, and an authority
+        // statement for another head are all refused.
+        let other = created;
+        assert!(
+            a.prepare_lineage_revision_record(&other, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        let mut stale = genesis.clone();
+        stale.revision = 7;
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &stale, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        // Once the receipt is acknowledged there is nothing pending to publish: no replay.
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        // The following revision is exactly sequence 2, and only on the revision-2 head.
+        let accepted = match &receipt.change {
+            Change::DeviceAuthorized(grant) => (**grant).clone(),
+            _ => panic!(),
+        };
+        accept(&mut b, &accepted).await;
+        let second = a.lineage().await.unwrap();
+        assert_eq!(second.revision, 2);
+        let request_c = request(&mut c, &prf(3), &second).await;
+        let receipt = approve(&mut a, &request_c).await;
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &publish_consent(&genesis))
+                .await
+                .is_err()
+        );
+        let value = a
+            .prepare_lineage_revision_record(
+                &receipt,
+                &second,
+                b"revision-three",
+                &publish_consent(&second),
+            )
+            .await
+            .unwrap();
+        assert_eq!(value.seq, 2);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn a_lineage_revision_for_another_head_is_refused_by_the_authority() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 4);
+        let mut b = machine(&store, &time, &guard, 5);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let genesis = a.lineage().await.unwrap();
+        let request_b = request(&mut b, &prf(2), &genesis).await;
+        let receipt = approve(&mut a, &request_b).await;
+        let wrong = consent(
+            Action::PublishLineage,
+            &genesis.binding,
+            Some(genesis.root),
+            genesis.epoch,
+            None,
+            Some([9; 32]),
+        );
+        assert!(
+            a.prepare_lineage_revision_record(&receipt, &genesis, b"x", &wrong)
+                .await
+                .is_err()
+        );
     });
 }

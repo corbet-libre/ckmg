@@ -106,11 +106,11 @@ macro_rules! typed_bytes {
             fn from_str(s: &str) -> Result<Self, Error> {
                 if s.len() != 5 + (($len as usize) * 8).div_ceil(6) { return Err(Error::Encoding); }
                 let (kind, value) = s.split_once(':').ok_or(Error::Encoding)?;
-                let kind: [u8; 4] = kind.as_bytes().try_into().map_err(crate::error::redact(Error::Encoding))?;
+                let kind: [u8; 4] = kind.as_bytes().try_into().map_err(|_| Error::Encoding)?;
                 let bytes = BASE64URL_NOPAD
                     .decode(value.as_bytes())
-                    .map_err(crate::error::redact(Error::Encoding))?;
-                let value: [u8; $len] = bytes.try_into().map_err(crate::error::redact(Error::Encoding))?;
+                    .map_err(|_| Error::Encoding)?;
+                let value: [u8; $len] = bytes.try_into().map_err(|_| Error::Encoding)?;
                 Ok(Self { kind: CryptoKind(kind), value })
             }
         }
@@ -118,6 +118,19 @@ macro_rules! typed_bytes {
         impl Serialize for $name {
             fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 serializer.collect_str(self)
+            }
+        }
+
+        impl schemars::JsonSchema for $name {
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
+            }
+            fn schema_id() -> std::borrow::Cow<'static, str> {
+                concat!(module_path!(), "::", stringify!($name)).into()
+            }
+            fn json_schema(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+                // Serde emits the typed base64url string, never the internal array.
+                <String as schemars::JsonSchema>::json_schema(generator)
             }
         }
 

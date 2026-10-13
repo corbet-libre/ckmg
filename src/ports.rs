@@ -1,6 +1,6 @@
 //! Trusted runtime ports. There are no default storage or authority implementations.
 
-use crate::{Binding, Error, PublicKey};
+use crate::{Binding, Error, PublicKey, Purpose, Scope};
 use serde::{Deserialize, Serialize};
 use std::future::Future;
 
@@ -58,6 +58,22 @@ pub trait SecureStore {
         expected: Option<[u8; 32]>,
         replacement: &[u8],
     ) -> impl Future<Output = Result<Commit, Error>>;
+
+    /// Commit a root transition and its compound Store wrapper atomically.
+    /// The cipher belongs to the exact prepared replacement root. A compound
+    /// adapter MUST rewrap its existing random data key in the same transaction
+    /// as replacement and companion owners/outputs. It must never split writes.
+    /// The default is only for standalone sealed-checkpoint stores, which have
+    /// no outer compound wrapper; their existing atomic persistence is sufficient.
+    fn compare_exchange_wrapped(
+        &mut self,
+        location: &Locator,
+        expected: Option<[u8; 32]>,
+        replacement: &[u8],
+        _cipher: &crate::passkey::StoreCipher,
+    ) -> impl Future<Output = Result<Commit, Error>> {
+        self.compare_exchange(location, expected, replacement)
+    }
 }
 
 /// An injected trusted clock, in Unix seconds. Regressions fail closed.
@@ -79,7 +95,41 @@ pub struct SystemEntropy;
 
 impl Entropy for SystemEntropy {
     fn fill(&mut self, output: &mut [u8]) -> Result<(), Error> {
-        getrandom::fill(output).map_err(crate::error::redact(Error::Randomness))
+        getrandom::fill(output).map_err(|_| Error::Randomness)
+    }
+}
+
+/// The only device purposes admitted without a member-lineage read.
+/// This discriminant cannot name an arbitrary purpose or a member key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NodePurpose {
+    /// The device's onion-service identity, never an application signing key.
+    TorOnion,
+    /// Original VLD0 node signing/DH for Tor Records envelopes.
+    Vld0,
+}
+impl NodePurpose {
+    /// Construct the exact device purpose with its owner-selected generation.
+    pub fn purpose(self, generation: u32) -> Result<Purpose, Error> {
+        Purpose::new(Scope::Device, self.label(), generation)
+    }
+
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::TorOnion => "tor.onion",
+            Self::Vld0 => "tor.node",
+        }
+    }
+
+    pub(crate) fn of(purpose: &Purpose) -> Option<Self> {
+        if purpose.scope() != Scope::Device {
+            return None;
+        }
+        match purpose.label() {
+            "tor.onion" => Some(Self::TorOnion),
+            "tor.node" => Some(Self::Vld0),
+            _ => None,
+        }
     }
 }
 
@@ -95,12 +145,46 @@ pub enum Action {
     RequestPairing,
     /// Use current device authority for signing, encryption or key handles.
     Use,
+    /// Use only the named device node purpose while custody is unlocked in this
+    /// session and its device remains in the live HTTPS membership set. This
+    /// check must not read lineage through that same transport. It grants no
+    /// member-purpose, statement, pairing, rotation or application authority.
+    UseTransport(NodePurpose),
+    /// Read only the root-owned lineage record during this restore attempt.
+    /// Requires the original checkpoint, current certificate/assertion and fresh
+    /// HTTPS device membership. Grants no Store cipher, writer or member use.
+    ReadLineage,
+    /// Sign only the exact original bytes and deadline in `Authorization::signing`.
+    SignDeviceEd25519,
+    /// Issue only the original fixed account authorization for this current device.
+    /// Separate exact local intent and a retained current owner are mandatory.
+    AuthorizeAccountDevice,
+    /// Lend the broad synchronous Profile signer; requires separate explicit admission.
+    /// Metadata reads and exact Board signing must never authorize this capability.
+    LendDeviceSigner,
+    /// Lend Profile signing and immutable Envelope custody together. This needs
+    /// original Profile/Exchange admission, never a metadata or Board-sign intent.
+    LendProfileCustody,
     /// Approve a pending device after authenticated, user-confirmed pairing.
     Pair,
     /// Remove a device and replace the root, without resetting the member pseudonym.
     Rotate,
     /// Adopt an authenticated lineage or root update.
     Adopt,
+    /// Publish the next lineage record revision for the pending device authorization,
+    /// against a single-use admitted command and the live head the revision extends.
+    PublishLineage,
+}
+
+/// Original owner signing bytes and exclusive deadline. Input, not authority.
+/// The trusted adapter must verify that this deadline is within its current G3
+/// authority and local grant, then consume the exact admitted command once.
+#[derive(Clone, Copy)]
+pub struct DeviceSigning<'a> {
+    /// Exact bounded owner transcript; no digest or alternative framing.
+    pub transcript: &'a [u8],
+    /// Exclusive Unix-second deadline from the trusted local admission.
+    pub expires: u64,
 }
 
 /// Authorization input, not a verified capability. Debug omits all identifiers.
@@ -122,10 +206,111 @@ pub struct Authorization<'a> {
     pub target: Option<PublicKey>,
     /// Digest of the exact pairing request or transition, where applicable.
     pub statement: Option<[u8; 32]>,
+    /// Present only for `SignDeviceEd25519` or `AuthorizeAccountDevice`;
+    /// bytes are borrowed through authorization.
+    pub signing: Option<DeviceSigning<'a>>,
     /// Current injected time.
     pub now: u64,
     /// Opaque, bounded authority evidence; never persisted or logged by ckmg.
     pub evidence: &'a [u8],
+}
+
+/// Exact first-lineage payload, not current member authority. The enclosing
+/// owner must decode its canonical packed evidence and verify this original
+/// receipt's certificate/assertion against current policy and fresh HTTPS device
+/// membership after its waits. A login assertion cannot replace the receipt's
+/// dedicated passkey challenge. No generic root signing is authorized.
+pub struct GenesisAuthorization<'a> {
+    /// Exact original durable Created receipt, including its device attestation.
+    pub receipt: &'a crate::Receipt,
+    /// Exact authority reference authenticated in the original Created Keys
+    /// checkpoint. The creation composer must have bound it to the original
+    /// CPky credential ID; require that same ID in the verified certificate.
+    pub authority_reference: &'a [u8],
+    /// Exact packed plaintext that the fixed CDHT lineage value will encrypt.
+    pub evidence: &'a [u8],
+    /// Current injected Unix-second observation.
+    pub now: u64,
+    /// Exclusive trusted request deadline; the owner must also bound it by its
+    /// actual session, certificate, assertion and current policy lifetimes.
+    pub expires: u64,
+}
+
+impl std::fmt::Debug for GenesisAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("GenesisAuthorization([redacted])")
+    }
+}
+
+/// Exact original pending Created receipt and authenticated durable completion
+/// intent. The enclosing owner verifies original certificate/assertion proof
+/// for this receipt's dedicated challenge, current signed Policy and original
+/// live membership, plus every Store generation/digest and immutable intent
+/// field against its actual authenticated outer/inner owner state. Caller
+/// numbers, login assertions and cached accepting results are insufficient.
+pub struct CompletionAuthorization<'a> {
+    /// Exact pending Created receipt authenticated by the original Keys decoder.
+    pub receipt: &'a crate::Receipt,
+    /// Original sealed DeviceInfo reference, never a caller-selected current
+    /// passkey. The verified certificate must name this exact original ID.
+    pub authority_reference: &'a [u8],
+    /// Original fixed PRF-derived local Keys slot.
+    pub location: &'a Locator,
+    /// Digest of the exact original pending encrypted Keys entry.
+    pub sealed_digest: &'a [u8; 32],
+    /// All immutable inputs loaded from the actual durable Prepared intent.
+    pub intent: &'a crate::CompletionIntent,
+    /// Current Unix-second observation, checked around awaits and signing.
+    pub now: u64,
+}
+impl std::fmt::Debug for CompletionAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CompletionAuthorization([redacted])")
+    }
+}
+
+/// Actual durable outer checkpoint holding the original unenrolled ciphertext.
+/// These numbers are not authority; the composer checks its original Store.
+pub struct InitialActivationIntent {
+    /// Exact authenticated outer generation, never a missing-cache observation.
+    pub generation: u64,
+    /// Digest of the actual durable encrypted outer checkpoint.
+    pub digest: [u8; 32],
+}
+impl std::fmt::Debug for InitialActivationIntent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InitialActivationIntent([redacted])")
+    }
+}
+
+/// Dedicated activation of one pre-registration durable private candidate.
+/// Require the actual current same-key initial-enrollment owner, its immutable
+/// accepted seed, current member/device/Policy and exact durable candidate.
+/// Ordinary certificates, login data and serialized claims never suffice.
+pub struct InitialActivationAuthorization<'a> {
+    /// Original fixed community and externally verified pseudonym.
+    pub binding: &'a Binding,
+    /// Original PRF-derived device which the current membership must authorize.
+    pub device: PublicKey,
+    /// Exact original CPky credential ID, retained inside this candidate.
+    pub authority_reference: &'a [u8],
+    /// Opaque commitment generated before the original registration challenge.
+    pub seed: &'a [u8; 32],
+    /// Original fixed operation; this is not a committed public receipt.
+    pub operation: crate::OperationId,
+    /// Original community-scoped passkey locator.
+    pub location: &'a Locator,
+    /// Exact authenticated revision-zero candidate ciphertext digest.
+    pub sealed_digest: &'a [u8; 32],
+    /// Original durable owner checkpoint, checked against the real Store.
+    pub durable: &'a InitialActivationIntent,
+    /// Current monotonic checked local sample.
+    pub now: u64,
+}
+impl std::fmt::Debug for InitialActivationAuthorization<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("InitialActivationAuthorization([redacted])")
+    }
 }
 
 impl std::fmt::Debug for Authorization<'_> {
@@ -138,11 +323,155 @@ impl std::fmt::Debug for Authorization<'_> {
 
 /// Trusted authorization/freshness adapter implemented by the enclosing vault.
 ///
-/// Check origin, pseudonym, current root/epoch, exact device revocation and live
-/// passkey authority. Pair/Rotate must verify the bound user approval; possession of
-/// a public key or a pairing proof alone is insufficient. Refuse if current authority
+/// Check origin, pseudonym, exact device revocation and live passkey authority.
+/// UseTransport admits only its fixed device purpose using unlocked session
+/// custody and a fresh live server device-set observation, without a lineage read.
+/// Member operations additionally require the highest-epoch certified lineage
+/// observed by a forced DHT read under its read agreement (ties: smaller hash),
+/// containing this device. This does not claim a globally latest lineage.
+/// Neither path may reuse an accepting result, lease or grace period. A detected
+/// server/lineage removal must invalidate custody at the next check.
+/// Pair/Rotate must verify the bound user approval; possession of
+/// a public key or a pairing proof alone is insufficient. SignDeviceEd25519 requires
+/// exact one-use transcript/deadline admission; LendDeviceSigner requires its own
+/// explicit owner operation and must never follow from Use or signing admission.
+/// Recheck authority deadlines after waits. Refuse if current authority
 /// cannot be established. No permissive implementation ships with this library.
 pub trait Authority {
+    /// Consume a fresh original same-key enrollment observation for this exact
+    /// retained candidate. Return its genuine checked server/owner clock floor.
+    /// Existing Create/Use/certificate ports cannot activate a candidate.
+    fn check_initial_activation(
+        &mut self,
+        _request: InitialActivationAuthorization<'_>,
+    ) -> impl Future<Output = Result<u64, Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// Reborrow the same actual live owner and current Policy after the final
+    /// storage await. No I/O, caller timestamp or cached accepting verdict.
+    fn check_initial_activation_current(
+        &mut self,
+        _request: InitialActivationAuthorization<'_>,
+    ) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
     /// Authorize this exact request or refuse with a coarse error.
     fn check(&mut self, request: Authorization<'_>) -> impl Future<Output = Result<(), Error>>;
+
+    /// Synchronously reborrow the original current owner for an already
+    /// authenticated normal checkpoint bootstrap. The request must be the same
+    /// exact Use lineage, device, statement and evidence previously checked by
+    /// `check`; no pending creation or historical genesis deadline is renewed.
+    /// Require the actual retained session/device lease, current signed policy,
+    /// exclusive deadlines and nonregressing owner clock. No I/O or cached
+    /// accepting result is sufficient. Return the genuine owner's checked floor.
+    fn check_checkpoint_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Final synchronous check for the exact original account-device transcript
+    /// after Keys' last Store await. Reborrow the same retained genuine session,
+    /// certificate, current lineage and policy owners; require the requested
+    /// expiry to fit every exclusive owner deadline. The preceding asynchronous
+    /// check must already have consumed separate one-use local intent. A cached
+    /// verdict, ordinary Use or INITIAL provenance alone cannot authorize this.
+    /// Return the actual checked owner clock floor; no I/O or caller time proof.
+    fn check_account_device_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Dedicated current-device entry. The original action and transcript stay
+    /// unchanged; this only lets an owner retain its genuine local lease until
+    /// the existing final synchronous hook. It grants nothing by default beyond
+    /// the original asynchronous check; the final hook still refuses by default.
+    fn check_device_signing(
+        &mut self,
+        request: Authorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        self.check(request)
+    }
+
+    /// Dedicated record-recipient entry, retaining the original Use request.
+    /// Current-owner implementations can distinguish this bounded loan from
+    /// ordinary Use. The existing final synchronous hook remains mandatory.
+    fn check_record_recipient(
+        &mut self,
+        request: Authorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        self.check(request)
+    }
+
+    /// Drop an unfinished current-owner attempt and release its local guards.
+    /// This negative-only cleanup performs no I/O and can grant no authority.
+    /// Keys invokes it on every scoped current-operation exit, including cancel.
+    fn discard_current_attempt(&mut self) {}
+
+    /// Final synchronous check for an exact device transcript after the last
+    /// Store await. The original asynchronous check must have consumed distinct
+    /// one-use intent for these same bytes and exclusive deadline. Reborrow the
+    /// retained current session, certificate, lineage and policy owners; require
+    /// the expiry to fit every owner bound. Ordinary Use, an INITIAL ACK or a
+    /// cached verdict cannot grant this operation. Return the actual owner clock
+    /// floor; no I/O or caller-supplied timestamp establishes currentness.
+    fn check_device_signing_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Reborrow the same original live owner for the dedicated record recipient
+    /// after the final checkpoint await. Require the exact already-checked Use
+    /// binding/root/device/epoch, no target/statement/signing/evidence, fresh
+    /// current Charter/device authority, exclusive owner deadlines and clock.
+    /// Return the actual owner's checked floor, never a caller timestamp or a
+    /// cached accepting result. No I/O is allowed at this point of use.
+    fn check_record_recipient_current(
+        &mut self,
+        _request: Authorization<'_>,
+    ) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Dedicated, one-attempt certified genesis admission. Existing authorities
+    /// refuse by default; Create, transport use or normal Use cannot substitute.
+    fn check_genesis(
+        &mut self,
+        _request: GenesisAuthorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// Reborrow original current policy and check the retained owner membership
+    /// observation at the point of use, after Keys' final Store wait. Verify the
+    /// same exact request, live session/device generation, nonregressing clock
+    /// and exclusive deadlines. No cached boolean or synthetic lease suffices.
+    /// This callback performs no I/O and must not retain borrowed request bytes.
+    fn check_genesis_current(&mut self, _request: GenesisAuthorization<'_>) -> Result<(), Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Dedicated authenticated pending-creation completion only. Existing
+    /// authorities refuse; ordinary Create/Use/genesis ports never substitute.
+    /// Every reopen requires a new actual original Foyer/Keyhole owner check and
+    /// its checked time floor. Caller timestamps, cached policy or a verdict
+    /// remembered before restart cannot supply this observation.
+    fn check_completion(
+        &mut self,
+        _request: CompletionAuthorization<'_>,
+    ) -> impl Future<Output = Result<u64, Error>> {
+        async { Err(Error::Unauthorized) }
+    }
+
+    /// After the final Store await, synchronously compare the same original
+    /// authenticated Store/Prepared intent and reborrow current signed Policy
+    /// and actual original membership/session lease. No I/O, copied verdict,
+    /// fabricated observation or borrowed request retention is permitted.
+    /// Return the actual original Foyer/Keyhole owner's checked time floor,
+    /// including its retained monotonic observations. A caller timestamp or
+    /// cached policy verdict cannot supply this floor, including after reopen.
+    fn check_completion_current(
+        &mut self,
+        _request: CompletionAuthorization<'_>,
+    ) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
 }
