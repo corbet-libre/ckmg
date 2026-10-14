@@ -43,6 +43,7 @@ mod node_cipher;
 mod ports;
 mod purpose;
 mod record_cipher;
+mod signing_ledger;
 mod typed;
 mod vld0;
 
@@ -72,6 +73,7 @@ pub use ports::{
 };
 pub use purpose::{MAX_LABEL_BYTES, Purpose, Scope};
 pub use record_cipher::{Vld0RecordCipher, Vld0RecordReader};
+pub use signing_ledger::{SigningLedger, SigningPhase, StoredSignature};
 pub use typed::{BEST_KIND, CryptoKind, HashDigest, PublicKey, Signature, VLD0};
 pub use vld0::{hash, validate_public_key, verify, verify_ed25519};
 

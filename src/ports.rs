@@ -174,6 +174,16 @@ pub enum Action {
     /// Publish the next lineage record revision for the pending device authorization,
     /// against a single-use admitted command and the live head the revision extends.
     PublishLineage,
+    /// Sign exactly the 32-byte contact digest in `Authorization::statement` with the
+    /// account key (P-256, wave contact consent). Needs a single-use admitted command
+    /// naming this digest; grants no other digest and no other account-key use.
+    SignContact,
+    /// Sign exactly the digest of a wave Resolution receipt, under the same rules as
+    /// [`Action::SignContact`] but never interchangeable with it.
+    SignResolution,
+    /// Sign exactly the digest of a wave Acknowledgment, under the same rules as
+    /// [`Action::SignContact`] but never interchangeable with it.
+    SignAcknowledgment,
 }
 
 /// Original owner signing bytes and exclusive deadline. Input, not authority.
@@ -378,6 +388,27 @@ pub trait Authority {
     /// verdict, ordinary Use or INITIAL provenance alone cannot authorize this.
     /// Return the actual checked owner clock floor; no I/O or caller time proof.
     fn check_account_device_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Err(Error::Unauthorized)
+    }
+
+    /// Asynchronous entry for one account-key signature. The request carries the signing
+    /// action and the exact digest in `statement`; the owner must consume single-use
+    /// intent for exactly that pair and keep its genuine session for the final hook
+    /// `check_account_signing_current`. Defaults to the ordinary `check`.
+    fn check_account_signing(
+        &mut self,
+        request: Authorization<'_>,
+    ) -> impl Future<Output = Result<(), Error>> {
+        self.check(request)
+    }
+
+    /// Final synchronous check after Keys' last Store await for one account-key
+    /// signature (`SignContact`, `SignResolution` or `SignAcknowledgment`). The request
+    /// repeats the action and the exact digest in `statement` that the asynchronous
+    /// `check` consumed single-use intent for. Reborrow the same retained session,
+    /// lineage and policy owners and return the actual checked owner clock floor.
+    /// Refuses by default; ordinary Use or a cached verdict cannot grant it.
+    fn check_account_signing_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
         Err(Error::Unauthorized)
     }
 

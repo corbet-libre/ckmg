@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 mod account_device;
+#[cfg(feature = "wallet-engine")]
+mod account_signing;
 mod current_signing;
 mod enrollment;
 mod genesis;
@@ -24,6 +26,8 @@ enum CurrentCheck<'a> {
     #[cfg(feature = "wallet-engine")]
     RecordRecipient,
     DeviceSigning(crate::DeviceSigning<'a>),
+    #[cfg(feature = "wallet-engine")]
+    AccountSigning,
 }
 pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
 pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
@@ -522,6 +526,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             #[cfg(feature = "wallet-engine")]
             CurrentCheck::RecordRecipient => None,
             CurrentCheck::DeviceSigning(signing) => Some(*signing),
+            #[cfg(feature = "wallet-engine")]
+            CurrentCheck::AccountSigning => None,
         };
         self.check_authority_with(
             Authorization {
@@ -563,6 +569,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             #[cfg(feature = "wallet-engine")]
             CurrentCheck::RecordRecipient => self.authority.check_record_recipient(request).await,
             CurrentCheck::DeviceSigning(_) => self.authority.check_device_signing(request).await,
+            #[cfg(feature = "wallet-engine")]
+            CurrentCheck::AccountSigning => self.authority.check_account_signing(request).await,
         };
         if let Err(error) = result {
             self.fail_closed(if error == Error::Revoked {
