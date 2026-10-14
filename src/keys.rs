@@ -1,6 +1,7 @@
 //! The custody state machine: prepare, validate, commit, then expose outputs.
 
 use crate::keyring::{self, Material};
+use crate::lineage::{DEFAULT_PAIRING_SECONDS, MAX_PAIRING_SECONDS};
 use crate::lineage::{digest, encode, redacted};
 use crate::passkey::{self, PrfOutput};
 use crate::{
@@ -843,6 +844,23 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         info: DeviceInfo,
         evidence: &[u8],
     ) -> Result<Receipt, Error> {
+        self.request_pairing_for(prf, anchor, info, evidence, DEFAULT_PAIRING_SECONDS)
+            .await
+    }
+
+    /// As [`Self::request_pairing`] with the request valid for `lifetime` seconds, which
+    /// must be positive and at most [`MAX_PAIRING_SECONDS`].
+    pub async fn request_pairing_for(
+        &mut self,
+        prf: &PrfOutput,
+        anchor: &Lineage,
+        info: DeviceInfo,
+        evidence: &[u8],
+        lifetime: u64,
+    ) -> Result<Receipt, Error> {
+        if lifetime == 0 || lifetime > MAX_PAIRING_SECONDS {
+            return Err(Error::Limit);
+        }
         self.require_locked()?;
         anchor.verify()?;
         let location = passkey::vault_location(prf, anchor.binding.community())?;
@@ -871,7 +889,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             device,
             nonce: *vld0::random_secret(&mut self.entropy)?,
             issued_at: now,
-            expires_at: now.checked_add(300).ok_or(Error::Limit)?,
+            expires_at: now.checked_add(lifetime).ok_or(Error::Limit)?,
             proof: empty_signature(),
         };
         request.proof = vld0::sign(&material.device, &request.signed_bytes()?)?;
@@ -889,6 +907,20 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         anchor: &Lineage,
         evidence: &[u8],
     ) -> Result<Receipt, Error> {
+        self.renew_pairing_for(anchor, evidence, DEFAULT_PAIRING_SECONDS)
+            .await
+    }
+
+    /// As [`Self::renew_pairing`] with the new request valid for `lifetime` seconds.
+    pub async fn renew_pairing_for(
+        &mut self,
+        anchor: &Lineage,
+        evidence: &[u8],
+        lifetime: u64,
+    ) -> Result<Receipt, Error> {
+        if lifetime == 0 || lifetime > MAX_PAIRING_SECONDS {
+            return Err(Error::Limit);
+        }
         self.writable()?;
         self.refresh().await?;
         anchor.verify()?;
@@ -928,7 +960,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             device,
             nonce: *vld0::random_secret(&mut self.entropy)?,
             issued_at: now,
-            expires_at: now.checked_add(300).ok_or(Error::Limit)?,
+            expires_at: now.checked_add(lifetime).ok_or(Error::Limit)?,
             proof: empty_signature(),
         };
         request.proof = vld0::sign(&candidate.material.device, &request.signed_bytes()?)?;

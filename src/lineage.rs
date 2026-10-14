@@ -153,6 +153,13 @@ impl Lineage {
     }
 }
 
+/// Hard upper bound of a pairing request's lifetime; the composer chooses the actual
+/// lifetime from the community rulebook and may never exceed this.
+pub const MAX_PAIRING_SECONDS: u64 = 900;
+
+/// Default pairing request lifetime when the caller names none.
+pub const DEFAULT_PAIRING_SECONDS: u64 = 300;
+
 /// Proof of possession by a pending device, bound to a confirmed community root.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -183,7 +190,7 @@ impl PairingRequest {
         if self.version != 1
             || self.epoch == 0
             || self.issued_at >= self.expires_at
-            || self.expires_at - self.issued_at > 300
+            || self.expires_at - self.issued_at > MAX_PAIRING_SECONDS
             || self.root == self.device
         {
             return Err(Error::Encoding);

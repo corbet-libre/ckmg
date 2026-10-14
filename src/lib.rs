@@ -61,7 +61,8 @@ pub use keys::{
     inspect_checkpoint,
 };
 pub use lineage::{
-    Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
+    Binding, DEFAULT_PAIRING_SECONDS, KeyCertificate, Lineage, MAX_PAIRING_SECONDS, PairingGrant,
+    PairingRequest, RootEnvelope, Rotation,
 };
 pub use node_cipher::Vld0NodeCipher;
 pub use ports::{

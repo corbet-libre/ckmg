@@ -1843,3 +1843,50 @@ fn a_lineage_revision_for_another_head_is_refused_by_the_authority() {
         );
     });
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_pairing_request_lifetime_is_chosen_by_the_caller_and_bounded() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 46);
+        let mut b = machine(&store, &time, &guard, 47);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let anchor = a.lineage().await.unwrap();
+        let approval = consent(
+            Action::RequestPairing,
+            &anchor.binding,
+            Some(anchor.root),
+            anchor.epoch,
+            None,
+            Some(anchor.digest().unwrap()),
+        );
+        for lifetime in [0, ckmg::MAX_PAIRING_SECONDS + 1] {
+            assert_eq!(
+                b.request_pairing_for(&prf(2), &anchor, info(), &approval, lifetime)
+                    .await
+                    .unwrap_err(),
+                Error::Limit
+            );
+        }
+        let receipt = b
+            .request_pairing_for(
+                &prf(2),
+                &anchor,
+                info(),
+                &approval,
+                ckmg::MAX_PAIRING_SECONDS,
+            )
+            .await
+            .unwrap();
+        let Change::PairingRequested(request) = receipt.change else {
+            panic!()
+        };
+        assert_eq!(
+            request.expires_at - request.issued_at,
+            ckmg::MAX_PAIRING_SECONDS
+        );
+    });
+}
