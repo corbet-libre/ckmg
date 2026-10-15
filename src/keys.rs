@@ -30,7 +30,7 @@ enum CurrentCheck<'a> {
     AccountSigning,
 }
 pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
-pub use enrollment::{EnrollmentSeed, UnenrolledCreation};
+pub use enrollment::{DevicePurpose, EnrollmentSeed, UnenrolledCreation};
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
     CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCapability,

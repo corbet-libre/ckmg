@@ -113,6 +113,36 @@ impl EnrollmentSeed {
     }
 }
 
+/// The closed set of things a device key may sign before activation, each under its own
+/// fixed domain tag that ckmg prepends (`UnenrolledCreation::sign_device`).
+///
+/// ```compile_fail
+/// // No raw transcript and no caller-chosen tag: a purpose is required.
+/// fn raw(candidate: &ckmg::UnenrolledCreation) {
+///     let _ = candidate.sign_device(b"cvld.device-join.v1\0");
+/// }
+/// ```
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DevicePurpose {
+    /// The community's device-join message (`cvld.device-join.v1`).
+    DeviceJoin,
+    /// The community's device-session message (`cvld.device-session.v1`).
+    DeviceSession,
+    /// A stamp salt derivation; the signature is only ever hashed, never published.
+    SaltDerivation,
+}
+
+impl DevicePurpose {
+    /// The fixed domain tag prepended to every payload of this purpose.
+    pub const fn tag(self) -> &'static [u8] {
+        match self {
+            Self::DeviceJoin => b"cvld.device-join.v1\0",
+            Self::DeviceSession => b"cvld.device-session.v1\0",
+            Self::SaltDerivation => b"cmsg.device-join.salt.v1\0",
+        }
+    }
+}
+
 /// Authenticated original revision-zero material, never accepted custody.
 /// Loading it cannot synthesize registration provenance or a public receipt.
 pub struct UnenrolledCreation {
@@ -151,6 +181,22 @@ impl UnenrolledCreation {
             .as_ref()
             .ok_or(Error::Encoding)?
             .passkey_challenge()
+    }
+
+    /// Sign `payload` with this candidate's device key under the fixed domain tag of
+    /// `purpose` (plain Ed25519 over `purpose.tag() || payload`). The only device signer
+    /// before activation: a device-key member must join and open its session before it can
+    /// activate. The caller chooses neither the tag nor a raw transcript, so the signature
+    /// is valid for exactly that purpose; after activation `Keys` signs.
+    pub fn sign_device(&self, purpose: DevicePurpose, payload: &[u8]) -> Result<[u8; 64], Error> {
+        let tag = purpose.tag();
+        if payload.len() > MAX_MESSAGE_BYTES - tag.len() {
+            return Err(Error::Limit);
+        }
+        let mut message = Vec::with_capacity(tag.len() + payload.len());
+        message.extend_from_slice(tag);
+        message.extend_from_slice(payload);
+        Ok(vld0::sign_ed25519(&self.material.device, &message))
     }
 
     /// Compare only against an authenticated original pending checkpoint. This

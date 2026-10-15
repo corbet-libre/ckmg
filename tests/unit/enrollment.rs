@@ -518,3 +518,52 @@ shared!(
         }
     }
 );
+
+shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
+    let mut time = Time::default();
+    let (prf, candidate) = candidate(&mut time);
+    let device = *passkey::device_public_key(&prf, COMMUNITY).unwrap().value();
+    let payload = b"community, challenge and key";
+    let purposes = [
+        DevicePurpose::DeviceJoin,
+        DevicePurpose::DeviceSession,
+        DevicePurpose::SaltDerivation,
+    ];
+    let tags: Vec<&[u8]> = purposes.iter().map(|purpose| purpose.tag()).collect();
+    assert_eq!(
+        tags,
+        [
+            &b"cvld.device-join.v1\0"[..],
+            b"cvld.device-session.v1\0",
+            b"cmsg.device-join.salt.v1\0"
+        ]
+    );
+    for purpose in purposes {
+        let signature = candidate.sign_device(purpose, payload).unwrap();
+        // Valid under its own tag only: never over the bare payload ...
+        let signed = [purpose.tag(), &payload[..]].concat();
+        vld0::verify_ed25519(&device, &signed, &signature).unwrap();
+        assert!(vld0::verify_ed25519(&device, payload, &signature).is_err());
+        // ... and never as another purpose.
+        for other in purposes.into_iter().filter(|other| *other != purpose) {
+            let as_other = [other.tag(), &payload[..]].concat();
+            assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
+        }
+    }
+    // The same device key that activation keeps (the lineage's only device).
+    let lineage = &candidate.metadata.lineage;
+    assert_eq!(
+        lineage.devices,
+        [passkey::device_public_key(&prf, COMMUNITY).unwrap()]
+    );
+    let limit = MAX_MESSAGE_BYTES - DevicePurpose::SaltDerivation.tag().len();
+    assert!(
+        candidate
+            .sign_device(DevicePurpose::SaltDerivation, &vec![0; limit])
+            .is_ok()
+    );
+    assert_eq!(
+        candidate.sign_device(DevicePurpose::SaltDerivation, &vec![0; limit + 1]),
+        Err(Error::Limit)
+    );
+});
