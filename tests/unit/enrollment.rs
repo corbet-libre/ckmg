@@ -260,11 +260,12 @@ shared!(
         assert!(UnenrolledCreation::reopen(&prf, COMMUNITY, &damaged).is_err());
         let owner = Owner::new(&candidate);
         let store = Memory::default();
+        let challenge = candidate.passkey_challenge().unwrap();
         let mut keys = Keys::new(store.clone(), time, crate::SystemEntropy, owner);
-        assert_eq!(
-            keys.activate_initial(candidate, durable()).await.unwrap(),
-            expected
-        );
+        let activated = keys.activate_initial(candidate, durable()).await.unwrap();
+        assert_eq!(activated, expected);
+        // The pre-activation challenge is exactly the activated receipt's challenge.
+        assert_eq!(activated.passkey_challenge().unwrap(), challenge);
         assert_eq!(keys.authority.checks, 1);
         assert_eq!(keys.authority.final_checks, 2);
         let accepted = store

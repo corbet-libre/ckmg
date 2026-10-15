@@ -142,6 +142,17 @@ impl UnenrolledCreation {
         )
     }
 
+    /// The lineage challenge digest (`Receipt::passkey_challenge`) of the creation receipt
+    /// that activation outputs, so a device can have the genesis stamp cover it before
+    /// activation. A public digest only: no receipt, key or secret, and no authority.
+    pub fn passkey_challenge(&self) -> Result<[u8; 32], Error> {
+        self.metadata
+            .output
+            .as_ref()
+            .ok_or(Error::Encoding)?
+            .passkey_challenge()
+    }
+
     /// Compare only against an authenticated original pending checkpoint. This
     /// reveals no pre-enrollment receipt and grants no completion authority.
     pub fn matches_pending(&self, pending: &PendingCreation) -> bool {
