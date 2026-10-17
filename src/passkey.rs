@@ -140,6 +140,19 @@ pub fn device_public_key(prf: &PrfOutput, community: &str) -> Result<crate::Publ
     Ok(crate::vld0::public_key(&device_seed(prf, community)?))
 }
 
+/// The device key's session signature (`DevicePurpose::DeviceSession`, its fixed tag
+/// prepended) straight from the unlocked passkey session. A device-key member restarted after
+/// activation opens its community sessions with it BEFORE its Keys are live: the lease that
+/// opens them needs a session. Same key and tag rule as `UnenrolledCreation::sign_device`;
+/// only this one purpose, and the device seed never leaves.
+pub fn sign_device_session(
+    prf: &PrfOutput,
+    community: &str,
+    payload: &[u8],
+) -> Result<[u8; 64], Error> {
+    crate::DevicePurpose::DeviceSession.sign(&device_seed(prf, community)?, payload)
+}
+
 #[cfg(feature = "profile-envelope")]
 pub(crate) fn profile_storage_key(common: &Secret, community: &str) -> Result<Secret, Error> {
     expand(

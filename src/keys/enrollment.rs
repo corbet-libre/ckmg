@@ -141,6 +141,18 @@ impl DevicePurpose {
             Self::SaltDerivation => b"cmsg.device-join.salt.v1\0",
         }
     }
+
+    /// Plain Ed25519 over `tag() || payload` with `device`; the secret never leaves the crate.
+    pub(crate) fn sign(self, device: &Secret, payload: &[u8]) -> Result<[u8; 64], Error> {
+        let tag = self.tag();
+        if payload.len() > MAX_MESSAGE_BYTES - tag.len() {
+            return Err(Error::Limit);
+        }
+        let mut message = Vec::with_capacity(tag.len() + payload.len());
+        message.extend_from_slice(tag);
+        message.extend_from_slice(payload);
+        Ok(vld0::sign_ed25519(device, &message))
+    }
 }
 
 /// Authenticated original revision-zero material, never accepted custody.
@@ -189,14 +201,7 @@ impl UnenrolledCreation {
     /// activate. The caller chooses neither the tag nor a raw transcript, so the signature
     /// is valid for exactly that purpose; after activation `Keys` signs.
     pub fn sign_device(&self, purpose: DevicePurpose, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let tag = purpose.tag();
-        if payload.len() > MAX_MESSAGE_BYTES - tag.len() {
-            return Err(Error::Limit);
-        }
-        let mut message = Vec::with_capacity(tag.len() + payload.len());
-        message.extend_from_slice(tag);
-        message.extend_from_slice(payload);
-        Ok(vld0::sign_ed25519(&self.material.device, &message))
+        purpose.sign(&self.material.device, payload)
     }
 
     /// Compare only against an authenticated original pending checkpoint. This

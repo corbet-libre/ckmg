@@ -550,6 +550,25 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
             assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
         }
     }
+    // After activation the unlocked passkey session signs the session message with the same
+    // key and tag (a restarted device-key member), and only that purpose.
+    assert_eq!(
+        passkey::sign_device_session(&prf, COMMUNITY, payload).unwrap(),
+        candidate
+            .sign_device(DevicePurpose::DeviceSession, payload)
+            .unwrap()
+    );
+    assert!(
+        passkey::sign_device_session(&prf, "another-community", payload).unwrap()
+            != candidate
+                .sign_device(DevicePurpose::DeviceSession, payload)
+                .unwrap()
+    );
+    let session_limit = MAX_MESSAGE_BYTES - DevicePurpose::DeviceSession.tag().len();
+    assert_eq!(
+        passkey::sign_device_session(&prf, COMMUNITY, &vec![0; session_limit + 1]),
+        Err(Error::Limit)
+    );
     // The same device key that activation keeps (the lineage's only device).
     let lineage = &candidate.metadata.lineage;
     assert_eq!(
