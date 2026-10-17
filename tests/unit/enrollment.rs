@@ -564,6 +564,19 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
                 .sign_device(DevicePurpose::DeviceSession, payload)
                 .unwrap()
     );
+    // The opening signer also rebuilds the salt signature (same bytes as before activation)
+    // and never signs the join.
+    assert_eq!(
+        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::SaltDerivation, payload)
+            .unwrap(),
+        candidate
+            .sign_device(DevicePurpose::SaltDerivation, payload)
+            .unwrap()
+    );
+    assert_eq!(
+        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::DeviceJoin, payload),
+        Err(Error::Unauthorized)
+    );
     let session_limit = MAX_MESSAGE_BYTES - DevicePurpose::DeviceSession.tag().len();
     assert_eq!(
         passkey::sign_device_session(&prf, COMMUNITY, &vec![0; session_limit + 1]),

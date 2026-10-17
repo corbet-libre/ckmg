@@ -150,7 +150,26 @@ pub fn sign_device_session(
     community: &str,
     payload: &[u8],
 ) -> Result<[u8; 64], Error> {
-    crate::DevicePurpose::DeviceSession.sign(&device_seed(prf, community)?, payload)
+    sign_device_opened(prf, community, crate::DevicePurpose::DeviceSession, payload)
+}
+
+/// The same opening signer for the closed post-activation subset `{DeviceSession,
+/// SaltDerivation}`: a device-key member restarted during its first publication rebuilds its
+/// genesis stamp salt (the signature is only ever hashed, Ed25519 is deterministic, so the
+/// salt is the one its stamp covers). `DeviceJoin` stays pre-activation only (the enrollment
+/// signs it) and is refused here.
+pub fn sign_device_opened(
+    prf: &PrfOutput,
+    community: &str,
+    purpose: crate::DevicePurpose,
+    payload: &[u8],
+) -> Result<[u8; 64], Error> {
+    match purpose {
+        crate::DevicePurpose::DeviceSession | crate::DevicePurpose::SaltDerivation => {
+            purpose.sign(&device_seed(prf, community)?, payload)
+        }
+        crate::DevicePurpose::DeviceJoin => Err(Error::Unauthorized),
+    }
 }
 
 #[cfg(feature = "profile-envelope")]
