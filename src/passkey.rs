@@ -364,6 +364,43 @@ pub fn passkey_record_reader<'prf>(
     })
 }
 
+/// Write custody for one passkey-scoped DFLT(1) record (the wallet membership index): the
+/// record owner's signer and read cipher, derived exactly like [`passkey_record_reader`].
+/// Lent only synchronously; it exposes no secret and grants no membership or G3 authority.
+pub struct PasskeyRecordWriter {
+    owner: Secret,
+    read: Secret,
+}
+impl PasskeyRecordWriter {
+    /// Public owner used with the fixed original DFLT(1) schema.
+    pub fn owner(&self) -> crate::PublicKey {
+        crate::vld0::public_key(&self.owner)
+    }
+    /// Lend the record's signer and cipher synchronously; owned signed/encrypted bytes may
+    /// leave the callback, never custody.
+    pub fn with_record<T>(
+        &self,
+        use_record: impl for<'key> FnOnce(crate::Vld0Signer<'key>, crate::Vld0RecordCipher<'key>) -> T,
+    ) -> T {
+        use_record(
+            crate::keys::vld0_signer(&self.owner),
+            crate::Vld0RecordCipher { secret: &self.read },
+        )
+    }
+}
+impl std::fmt::Debug for PasskeyRecordWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PasskeyRecordWriter([redacted])")
+    }
+}
+
+/// Derive write custody for the passkey-scoped record named `scope`. Same derivations as
+/// [`passkey_record_reader`] and `native_passkey_record`; absence never creates identity.
+pub fn passkey_record_writer(prf: &PrfOutput, scope: &str) -> Result<PasskeyRecordWriter, Error> {
+    let (owner, read) = record_material(prf, scope)?;
+    Ok(PasskeyRecordWriter { owner, read })
+}
+
 pub(crate) fn record_material(prf: &PrfOutput, community: &str) -> Result<(Secret, Secret), Error> {
     Ok((
         expand(prf, b"passkey-record-owner-v1\0", community)?,

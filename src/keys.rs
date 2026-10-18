@@ -313,6 +313,14 @@ impl Vld0Signer<'_> {
     }
 }
 
+/// A record-owner signer over a derived secret (passkey record writer), crate-private.
+pub(crate) fn vld0_signer(secret: &Secret) -> Vld0Signer<'_> {
+    Vld0Signer(Ed25519Signer {
+        secret,
+        public_key: *vld0::public_key(secret).value(),
+    })
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Metadata {
