@@ -156,7 +156,7 @@ pub fn sign_device_session(
 /// The same opening signer for the closed post-activation subset `{DeviceSession,
 /// SaltDerivation}`: a device-key member restarted during its first publication rebuilds its
 /// genesis stamp salt (the signature is only ever hashed, Ed25519 is deterministic, so the
-/// salt is the one its stamp covers). `WalletBirthDevice` is signed here too (a registration
+/// salt is the one its stamp covers). `WalletBirthDevice` and `WalletBirthPassport` are signed here too (a registration
 /// restarted after activation binds its wallet device from the unlocked session), but only for
 /// the wallet community. `DeviceJoin` stays pre-activation only (the enrollment signs it) and is
 /// refused here.
@@ -172,7 +172,8 @@ pub fn sign_device_opened(
     match purpose {
         crate::DevicePurpose::DeviceSession
         | crate::DevicePurpose::SaltDerivation
-        | crate::DevicePurpose::WalletBirthDevice => {
+        | crate::DevicePurpose::WalletBirthDevice
+        | crate::DevicePurpose::WalletBirthPassport => {
             purpose.sign(&device_seed(prf, community)?, payload)
         }
         crate::DevicePurpose::DeviceJoin => Err(Error::Unauthorized),
