@@ -20,9 +20,18 @@ pub struct EphemeralTransport {
 }
 
 impl EphemeralTransport {
-    /// Fresh keys from `entropy`. `label` names the scope for the engine (for example
-    /// `registration.wallet`); it is public and never a member identifier.
-    pub fn new(entropy: &mut impl Entropy, label: &str) -> Result<Self, Error> {
+    /// Fresh keys from the platform CSPRNG (`getrandom`: the OS natively,
+    /// `crypto.getRandomValues` on wasm32). `label` names the scope for the engine (for
+    /// example `registration.wallet`); it is public and never a member identifier. There is
+    /// deliberately no public constructor that takes caller entropy: a caller-chosen key
+    /// would let two scopes, or two registrations, share one transport identity.
+    pub fn new(label: &str) -> Result<Self, Error> {
+        Self::from_entropy(&mut crate::SystemEntropy, label)
+    }
+
+    /// Fresh keys from `entropy`. Private: production goes through [`Self::new`]; only this
+    /// module's tests inject fixed entropy.
+    fn from_entropy(entropy: &mut impl Entropy, label: &str) -> Result<Self, Error> {
         if label.is_empty() || label.len() > 128 {
             return Err(Error::Limit);
         }
@@ -132,13 +141,35 @@ mod tests {
     }
 
     #[test]
+    fn the_production_constructor_takes_no_caller_entropy() {
+        // The only public constructor: a label in, keys from the platform CSPRNG out. This
+        // binding stops compiling if `new` ever accepts an entropy source again.
+        let production: fn(&str) -> Result<EphemeralTransport, Error> = EphemeralTransport::new;
+        let wallet = production("registration.wallet").expect("wallet");
+        let community = production("registration.community").expect("community");
+        let again = production("registration.wallet").expect("same label, new scope");
+        let keys = [&wallet, &community, &again].map(|t| t.public_key().expect("key"));
+        assert_ne!(keys[0], keys[1]);
+        assert_ne!(keys[0], keys[2], "a label never fixes the identity");
+        assert_ne!(keys[1], keys[2]);
+        for transport in [&wallet, &community, &again] {
+            let (node, onion) = (
+                transport.node.as_ref().expect("node"),
+                transport.onion.as_ref().expect("onion"),
+            );
+            assert_ne!(**node, [0u8; 32]);
+            assert_ne!(**node, **onion);
+        }
+    }
+
+    #[test]
     fn keys_come_from_entropy_alone_and_differ_per_scope() {
         let mut entropy = Counted(1, 0);
         // No PRF, binding, store or backend is an input: the constructor takes entropy only.
-        let wallet = EphemeralTransport::new(&mut entropy, "registration.wallet").expect("wallet");
+        let wallet = EphemeralTransport::from_entropy(&mut entropy, "registration.wallet").expect("wallet");
         assert_eq!(entropy.1, 64, "exactly two fresh keys");
         let community =
-            EphemeralTransport::new(&mut entropy, "registration.community").expect("community");
+            EphemeralTransport::from_entropy(&mut entropy, "registration.community").expect("community");
         assert_ne!(
             wallet.public_key().expect("wallet key"),
             community.public_key().expect("community key"),
@@ -154,7 +185,7 @@ mod tests {
     #[test]
     fn its_engine_dials_only_and_locks_with_it() {
         let mut transport =
-            EphemeralTransport::new(&mut Counted(3, 0), "registration.wallet").expect("transport");
+            EphemeralTransport::from_entropy(&mut Counted(3, 0), "registration.wallet").expect("transport");
         let initializer = transport
             .native_initializer(ctrn::Scope([4; 32]))
             .expect("initializer");
@@ -169,7 +200,7 @@ mod tests {
     #[test]
     fn a_locked_custody_lends_nothing() {
         let mut transport =
-            EphemeralTransport::new(&mut Counted(7, 0), "registration.wallet").expect("transport");
+            EphemeralTransport::from_entropy(&mut Counted(7, 0), "registration.wallet").expect("transport");
         transport.lock();
         assert!(matches!(transport.public_key(), Err(Error::Locked)));
         assert!(matches!(transport.with_node(|_, _| ()), Err(Error::Locked)));
@@ -185,10 +216,10 @@ mod tests {
             }
         }
         assert!(matches!(
-            EphemeralTransport::new(&mut Zero, "registration.wallet"),
+            EphemeralTransport::from_entropy(&mut Zero, "registration.wallet"),
             Err(Error::Randomness)
         ));
-        assert!(EphemeralTransport::new(&mut Counted(1, 0), "").is_err());
-        assert!(EphemeralTransport::new(&mut Counted(1, 0), &"x".repeat(129)).is_err());
+        assert!(EphemeralTransport::from_entropy(&mut Counted(1, 0), "").is_err());
+        assert!(EphemeralTransport::from_entropy(&mut Counted(1, 0), &"x".repeat(129)).is_err());
     }
 }
