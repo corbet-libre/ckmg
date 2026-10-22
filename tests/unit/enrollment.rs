@@ -675,3 +675,73 @@ shared!(wallet_birth_device_signs_only_for_the_wallet_device, {
         Err(Error::Limit)
     );
 });
+
+shared!(wallet_birth_passport_signs_only_for_the_wallet_device, {
+    assert_eq!(
+        DevicePurpose::WalletBirthPassport.tag(),
+        b"cvld.wallet-birth-passport.v1\0"
+    );
+    let payload = crate::wallet_birth_passport_payload(b"issuance request bytes");
+    assert_ne!(
+        payload,
+        crate::wallet_birth_passport_payload(b"issuance request byteS")
+    );
+    let mut time = Time::default();
+    let (prf, wallet) = candidate_in(&mut time, "wallet");
+    let device = *passkey::device_public_key(&prf, "wallet").unwrap().value();
+    let signature = wallet
+        .sign_device(DevicePurpose::WalletBirthPassport, &payload)
+        .unwrap();
+    let signed = [DevicePurpose::WalletBirthPassport.tag(), &payload[..]].concat();
+    vld0::verify_ed25519(&device, &signed, &signature).unwrap();
+    // A birth-device signature over the same bytes is a different message.
+    let as_device = [DevicePurpose::WalletBirthDevice.tag(), &payload[..]].concat();
+    assert!(vld0::verify_ed25519(&device, &as_device, &signature).is_err());
+    assert_eq!(
+        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::WalletBirthPassport, &payload)
+            .unwrap(),
+        signature
+    );
+    let (prf, community) = candidate(&mut time);
+    assert_eq!(
+        community.sign_device(DevicePurpose::WalletBirthPassport, &payload),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        passkey::sign_device_opened(
+            &prf,
+            COMMUNITY,
+            DevicePurpose::WalletBirthPassport,
+            &payload
+        ),
+        Err(Error::Unauthorized)
+    );
+});
+
+#[test]
+fn wallet_birth_device_payload_is_length_prefixed_in_fixed_order() {
+    let payload =
+        crate::wallet_birth_device_payload("https://o", "ab", &[7, 8], &[1; 32], &[2; 32]).unwrap();
+    let mut expected = Vec::new();
+    for field in [&b"https://o"[..], b"ab", &[7, 8], &[1; 32], &[2; 32]] {
+        expected.extend_from_slice(&(field.len() as u32).to_be_bytes());
+        expected.extend_from_slice(field);
+    }
+    assert_eq!(payload, expected);
+    // Moving a byte between adjacent fields changes the message.
+    assert_ne!(
+        payload,
+        crate::wallet_birth_device_payload("https://o", "a", &[b'b', 7, 8], &[1; 32], &[2; 32])
+            .unwrap()
+    );
+    assert_eq!(
+        crate::wallet_birth_device_payload(
+            "https://o",
+            "ab",
+            &vec![0; MAX_MESSAGE_BYTES],
+            &[1; 32],
+            &[2; 32]
+        ),
+        Err(Error::Limit)
+    );
+}
