@@ -19,6 +19,18 @@ pub(in crate::keys) struct StoredInitial {
 /// selected lineage and later exact inner Store join may authorize recovery.
 pub struct InitialCheckpointProvenance(StoredInitial);
 impl InitialCheckpointProvenance {
+    /// The restored device's `DeviceJoin` signature for the stamp-less re-confirmation of the
+    /// join the community already applied (key from `prf` and `community`, enrollment tag).
+    /// This authenticated original ACK is the capability; no other public route signs a join
+    /// outside the enrollment (`passkey::sign_device_opened` refuses it).
+    pub fn sign_device_join_restored(
+        &self,
+        prf: &crate::passkey::PrfOutput,
+        community: &str,
+        payload: &[u8],
+    ) -> Result<[u8; 64], Error> {
+        crate::passkey::sign_device_join_restored(prf, community, payload)
+    }
     /// Original enrollment commitment, recomputed from retained private root.
     pub fn seed(&self) -> [u8; 32] {
         self.0.seed

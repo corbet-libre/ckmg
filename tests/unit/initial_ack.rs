@@ -274,6 +274,18 @@ shared!(
             .unwrap();
         assert_eq!(actual.to_bytes().unwrap(), expected.to_bytes().unwrap());
         assert_eq!(actual.operation(), receipt.operation);
+        // The authenticated ACK is the restored device's only route to a join signature: the
+        // device key's DeviceJoin signature, while the opening signer still refuses it.
+        let device = passkey::device_public_key(&prf, COMMUNITY).unwrap();
+        let signature = actual
+            .sign_device_join_restored(&prf, COMMUNITY, PAYLOAD)
+            .unwrap();
+        let tagged = [DevicePurpose::DeviceJoin.tag(), PAYLOAD].concat();
+        vld0::verify_ed25519(device.value(), &tagged, &signature).unwrap();
+        assert_eq!(
+            passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::DeviceJoin, PAYLOAD),
+            Err(Error::Unauthorized)
+        );
         assert_eq!(reopened.inspect(&acknowledged).unwrap().revision(), 2);
         assert_eq!(
             reopened

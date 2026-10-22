@@ -173,11 +173,12 @@ pub fn sign_device_opened(
 }
 
 /// The device key's join signature (`DevicePurpose::DeviceJoin`) from the opening, ONLY for a
-/// device restoring a member whose join the community already applied: the caller (cvlt's
-/// `RecoveryCandidate`) holds the PRF-authenticated original initial ACK. The community answers
-/// such a stamp-less join only as the re-confirmation of that applied join (same key, same
-/// seed); any new join still needs a fresh wallet stamp. The device seed never leaves.
-pub fn sign_device_join_restored(
+/// device restoring a member whose join the community already applied. Crate-private: the
+/// only way in is `InitialCheckpointProvenance::sign_device_join_restored`, whose receiver
+/// (minted only by ckmg from the PRF-authenticated original initial ACK) is the capability.
+/// The community answers such a stamp-less join only as the re-confirmation of that applied
+/// join (same key, same seed); any new join still needs a fresh wallet stamp.
+pub(crate) fn sign_device_join_restored(
     prf: &PrfOutput,
     community: &str,
     payload: &[u8],
