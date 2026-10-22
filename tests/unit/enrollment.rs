@@ -577,6 +577,20 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
         passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::DeviceJoin, payload),
         Err(Error::Unauthorized)
     );
+    // Only the restored device's re-confirmation signer (cvlt RecoveryCandidate) signs the
+    // join, with the enrollment's key and tag; another community's key differs.
+    assert_eq!(
+        passkey::sign_device_join_restored(&prf, COMMUNITY, payload).unwrap(),
+        candidate
+            .sign_device(DevicePurpose::DeviceJoin, payload)
+            .unwrap()
+    );
+    assert!(
+        passkey::sign_device_join_restored(&prf, "another-community", payload).unwrap()
+            != candidate
+                .sign_device(DevicePurpose::DeviceJoin, payload)
+                .unwrap()
+    );
     let session_limit = MAX_MESSAGE_BYTES - DevicePurpose::DeviceSession.tag().len();
     assert_eq!(
         passkey::sign_device_session(&prf, COMMUNITY, &vec![0; session_limit + 1]),
