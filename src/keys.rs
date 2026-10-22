@@ -19,6 +19,7 @@ mod current_signing;
 mod enrollment;
 mod genesis;
 mod inspection;
+mod ephemeral;
 mod transport;
 
 enum CurrentCheck<'a> {
@@ -36,6 +37,7 @@ pub use inspection::{
     CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCapability,
     LineageReadCustody, PendingCompletion, PendingCreation, ProvisionalLineage, inspect_checkpoint,
 };
+pub use ephemeral::EphemeralTransport;
 pub use transport::TransportSession;
 
 const CHECKPOINT_HEADER: &[u8] = b"ckmg.checkpoint.v1\0";
@@ -2301,7 +2303,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let current = self.loaded()?;
         let secret = purpose_secret(current, purpose, false)?;
         let community = current.metadata.lineage.binding.community().to_owned();
-        self.tor_custody.initializer(scope, secret, community)
+        self.tor_custody.initializer(scope, secret, community, false)
     }
 
     /// Consume-only browser onion custody for the exact device `tor.onion`
@@ -2325,7 +2327,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let secret = purpose_secret(current, purpose, false)?;
         let community = current.metadata.lineage.binding.community().to_owned();
         self.browser_tor_custody
-            .initializer(scope, secret, community)
+            .initializer(scope, secret, community, false)
     }
 }
 

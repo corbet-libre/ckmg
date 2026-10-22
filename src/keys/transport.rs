@@ -120,6 +120,7 @@ impl<C: Clock, A: Authority> TransportSession<C, A> {
             scope,
             self.onion.as_ref().ok_or(Error::Locked)?.clone(),
             self.binding.community().to_owned(),
+            false,
         )
     }
     /// Transfer the fixed onion purpose into the original browser engine.
@@ -133,6 +134,7 @@ impl<C: Clock, A: Authority> TransportSession<C, A> {
             scope,
             self.onion.as_ref().ok_or(Error::Locked)?.clone(),
             self.binding.community().to_owned(),
+            false,
         )
     }
 }

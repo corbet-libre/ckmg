@@ -14,6 +14,9 @@ pub struct BrowserTorInitializer {
     scope: ctrn::Scope,
     lease: Rc<Lease>,
     community: String,
+    /// An ephemeral registration identity dials only: its Node never publishes an onion
+    /// service (`ctrn::ClientOnly`).
+    pub(crate) client_only: bool,
 }
 
 const MAX_ENGINES: usize = 8;
@@ -25,6 +28,7 @@ impl Custody {
         scope: ctrn::Scope,
         secret: Secret,
         community: String,
+        client_only: bool,
     ) -> Result<BrowserTorInitializer, crate::Error> {
         self.0.retain(|entry| entry.strong_count() != 0);
         if self.0.len() >= MAX_ENGINES {
@@ -39,6 +43,7 @@ impl Custody {
             scope,
             lease,
             community,
+            client_only,
         })
     }
     pub(crate) fn close(&mut self) {
@@ -161,12 +166,12 @@ impl BrowserTorInitializer {
         // The original cross-platform Node API uses Arc. Its browser trait
         // bounds deliberately permit local JS owners; no Send claim is made.
         #[allow(clippy::arc_with_non_send_sync)]
-        let node = Arc::new(ctrn::Node::new(
-            Arc::new(network),
-            clock,
-            self.scope,
-            limits,
-        )?);
+        let network: Arc<dyn ctrn::Network> = if self.client_only {
+            Arc::new(ctrn::ClientOnly::new(Arc::new(network)))
+        } else {
+            Arc::new(network)
+        };
+        let node = Arc::new(ctrn::Node::new(network, clock, self.scope, limits)?);
         self.lease.bind(&node)?;
         Ok(node)
     }

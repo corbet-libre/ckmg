@@ -15,6 +15,9 @@ pub struct NativeTorInitializer {
     scope: ctrn::Scope,
     lease: Arc<Lease>,
     community: String,
+    /// An ephemeral registration identity dials only: its Node never publishes an onion
+    /// service (`ctrn::ClientOnly`).
+    pub(crate) client_only: bool,
 }
 
 const MAX_ENGINES: usize = 8;
@@ -26,6 +29,7 @@ impl Custody {
         scope: ctrn::Scope,
         secret: Secret,
         community: String,
+        client_only: bool,
     ) -> Result<NativeTorInitializer, crate::Error> {
         self.0.retain(|entry| entry.strong_count() != 0);
         if self.0.len() >= MAX_ENGINES {
@@ -40,6 +44,7 @@ impl Custody {
             scope,
             lease,
             community,
+            client_only,
         })
     }
     pub(crate) fn close(&mut self) {
@@ -135,7 +140,12 @@ impl NativeTorInitializer {
                 lease: self.lease.clone(),
             }),
         )?;
-        let node = Arc::new(ctrn::Node::new(Arc::new(network), clock, scope, limits)?);
+        let network: Arc<dyn ctrn::Network> = if self.client_only {
+            Arc::new(ctrn::ClientOnly::new(Arc::new(network)))
+        } else {
+            Arc::new(network)
+        };
+        let node = Arc::new(ctrn::Node::new(network, clock, scope, limits)?);
         self.lease.bind(&node)?;
         Ok(node)
     }
@@ -152,7 +162,7 @@ mod tests {
         let expected = crate::vld0::public_key(&secret);
         let mut custody = Custody::default();
         let initializer = custody
-            .initializer(ctrn::Scope([9; 32]), secret, "garden".into())
+            .initializer(ctrn::Scope([9; 32]), secret, "garden".into(), false)
             .unwrap();
         let identity = Identity {
             scope: initializer.scope,
@@ -178,18 +188,29 @@ mod tests {
                         ctrn::Scope([index as u8; 32]),
                         Secret::new([1; 32]),
                         "garden".into(),
+                        false,
                     )
                     .unwrap(),
             );
         }
         assert!(matches!(
-            custody.initializer(ctrn::Scope([33; 32]), Secret::new([2; 32]), "garden".into(),),
+            custody.initializer(
+                ctrn::Scope([33; 32]),
+                Secret::new([2; 32]),
+                "garden".into(),
+                false
+            ),
             Err(crate::Error::Limit)
         ));
         pending.pop();
         assert!(
             custody
-                .initializer(ctrn::Scope([33; 32]), Secret::new([2; 32]), "garden".into(),)
+                .initializer(
+                    ctrn::Scope([33; 32]),
+                    Secret::new([2; 32]),
+                    "garden".into(),
+                    false
+                )
                 .is_ok()
         );
     }
