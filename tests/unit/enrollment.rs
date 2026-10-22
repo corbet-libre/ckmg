@@ -171,9 +171,12 @@ impl Authority for Owner {
     }
 }
 fn candidate(time: &mut Time) -> (PrfOutput, UnenrolledCreation) {
+    candidate_in(time, COMMUNITY)
+}
+fn candidate_in(time: &mut Time, community: &str) -> (PrfOutput, UnenrolledCreation) {
     let prf = PrfOutput::from_bytes(&[66; 32]).unwrap();
     let seed = EnrollmentSeed::new(
-        Binding::new(COMMUNITY, "original member").unwrap(),
+        Binding::new(community, "original member").unwrap(),
         &mut crate::SystemEntropy,
     )
     .unwrap();
@@ -611,6 +614,64 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
     );
     assert_eq!(
         candidate.sign_device(DevicePurpose::SaltDerivation, &vec![0; limit + 1]),
+        Err(Error::Limit)
+    );
+});
+
+shared!(wallet_birth_device_signs_only_for_the_wallet_device, {
+    // The fixed wire tag: a change breaks every server and every recorded vector.
+    assert_eq!(
+        DevicePurpose::WalletBirthDevice.tag(),
+        b"cvld.wallet-birth-device.v1\0"
+    );
+    let payload = b"origin, account, credential, c and K";
+    let mut time = Time::default();
+    let (prf, wallet) = candidate_in(&mut time, "wallet");
+    let device = *passkey::device_public_key(&prf, "wallet").unwrap().value();
+    // Before activation: the enrollment's device key signs under the birth tag only.
+    let signature = wallet
+        .sign_device(DevicePurpose::WalletBirthDevice, payload)
+        .unwrap();
+    let signed = [DevicePurpose::WalletBirthDevice.tag(), &payload[..]].concat();
+    vld0::verify_ed25519(&device, &signed, &signature).unwrap();
+    assert!(vld0::verify_ed25519(&device, payload, &signature).is_err());
+    for other in [
+        DevicePurpose::DeviceJoin,
+        DevicePurpose::DeviceSession,
+        DevicePurpose::SaltDerivation,
+    ] {
+        let as_other = [other.tag(), &payload[..]].concat();
+        assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
+    }
+    // The opened signer gives the same bytes (Ed25519 is deterministic, same key, same tag).
+    assert_eq!(
+        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::WalletBirthDevice, payload)
+            .unwrap(),
+        signature
+    );
+    // The opened signer still refuses the join, also in the wallet community.
+    assert_eq!(
+        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::DeviceJoin, payload),
+        Err(Error::Unauthorized)
+    );
+    // A community device key never signs the wallet birth binding, before or after activation.
+    let (prf, community) = candidate(&mut time);
+    assert_eq!(
+        community.sign_device(DevicePurpose::WalletBirthDevice, payload),
+        Err(Error::Unauthorized)
+    );
+    assert_eq!(
+        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::WalletBirthDevice, payload),
+        Err(Error::Unauthorized)
+    );
+    let limit = MAX_MESSAGE_BYTES - DevicePurpose::WalletBirthDevice.tag().len();
+    assert_eq!(
+        passkey::sign_device_opened(
+            &prf,
+            "wallet",
+            DevicePurpose::WalletBirthDevice,
+            &vec![0; limit + 1]
+        ),
         Err(Error::Limit)
     );
 });

@@ -113,6 +113,9 @@ impl EnrollmentSeed {
     }
 }
 
+/// The wallet lineage's community name; its device key is the wallet device key `K`.
+pub(crate) const WALLET_COMMUNITY: &str = "wallet";
+
 /// The closed set of things a device key may sign before activation, each under its own
 /// fixed domain tag that ckmg prepends (`UnenrolledCreation::sign_device`).
 ///
@@ -130,6 +133,10 @@ pub enum DevicePurpose {
     DeviceSession,
     /// A stamp salt derivation; the signature is only ever hashed, never published.
     SaltDerivation,
+    /// The wallet device's first binding during the one-ceremony registration
+    /// (`cvld.wallet-birth-device.v1`): `sig_K(tag ‖ origin ‖ account ‖ credential ‖ c ‖ K)`.
+    /// Only the wallet's own device key signs it (community `"wallet"`).
+    WalletBirthDevice,
 }
 
 impl DevicePurpose {
@@ -139,6 +146,16 @@ impl DevicePurpose {
             Self::DeviceJoin => b"cvld.device-join.v1\0",
             Self::DeviceSession => b"cvld.device-session.v1\0",
             Self::SaltDerivation => b"cmsg.device-join.salt.v1\0",
+            Self::WalletBirthDevice => b"cvld.wallet-birth-device.v1\0",
+        }
+    }
+
+    /// Whether a device key of `community` may sign this purpose at all. The wallet birth
+    /// binding names the wallet device key, so a community device key never signs it.
+    pub(crate) fn allowed_in(self, community: &str) -> bool {
+        match self {
+            Self::WalletBirthDevice => community == WALLET_COMMUNITY,
+            Self::DeviceJoin | Self::DeviceSession | Self::SaltDerivation => true,
         }
     }
 
@@ -201,6 +218,9 @@ impl UnenrolledCreation {
     /// activate. The caller chooses neither the tag nor a raw transcript, so the signature
     /// is valid for exactly that purpose; after activation `Keys` signs.
     pub fn sign_device(&self, purpose: DevicePurpose, payload: &[u8]) -> Result<[u8; 64], Error> {
+        if !purpose.allowed_in(self.metadata.lineage.binding.community()) {
+            return Err(Error::Unauthorized);
+        }
         purpose.sign(&self.material.device, payload)
     }
 
