@@ -73,7 +73,7 @@ checks required before production use. Test vectors are evidence, not an audit.
 
 GitHub Actions runs formatting, native Clippy/tests, wasm32 Clippy, and the shared
 crypto/state suite in headless Chrome. Dependencies are recorded in `Cargo.lock`.
-No local workstation builds are required. Veilid reference tests remain isolated
+Veilid reference tests remain isolated
 under MPL-2.0; production depends on upstream crypto crates, never `veilid-core`.
 
 ## License
