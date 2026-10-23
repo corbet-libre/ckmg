@@ -1297,7 +1297,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// not lend a signer or consume a signing intent.
     pub async fn device_public_key(&mut self) -> Result<PublicKey, Error> {
         if self.state == State::Delegated {
-            return Ok(self.delegated_lineage_device().await?);
+            return self.delegated_lineage_device().await;
         }
         self.authorize(Action::Use, None, None, &[]).await?;
         self.refresh().await?;

@@ -95,10 +95,8 @@ impl Authority for Allow {
                     return Err(Error::Unauthorized);
                 }
             }
-            Action::Rotate | Action::Pair => {
-                if request.evidence != CEREMONY {
-                    return Err(Error::Unauthorized);
-                }
+            Action::Rotate | Action::Pair if request.evidence != CEREMONY => {
+                return Err(Error::Unauthorized);
             }
             _ => {}
         }
@@ -343,7 +341,7 @@ shared!(
 shared!(delegated_purposes_match_authorized_custody, {
     let mut f = Fixture::new().await;
     let board = member("board");
-    let (_, delegation) = f.delegate(&[board.clone()]).await;
+    let (_, delegation) = f.delegate(std::slice::from_ref(&board)).await;
     let mut delegated = f.delegated(&delegation).await;
     let full = f.keys.key(board.clone()).await.unwrap();
     let handle = delegated.key(board.clone()).await.unwrap();
@@ -402,7 +400,7 @@ shared!(delegated_purposes_match_authorized_custody, {
 shared!(delegated_custody_refuses_every_root_operation, {
     let mut f = Fixture::new().await;
     let board = member("board");
-    let (receipt, delegation) = f.delegate(&[board.clone()]).await;
+    let (receipt, delegation) = f.delegate(std::slice::from_ref(&board)).await;
     let lineage = delegation.lineage().clone();
     let full = f.keys.key(board.clone()).await.unwrap();
     let sealed = f.keys.seal(&full, b"ctx", b"x").await.unwrap();
@@ -437,7 +435,7 @@ shared!(delegated_custody_refuses_every_root_operation, {
     }
     // Lineage changes, rotation and pairing.
     assert_eq!(
-        keys.delegate_device(&[board.clone()], CEREMONY).await.err(),
+        keys.delegate_device(std::slice::from_ref(&board), CEREMONY).await.err(),
         no_root
     );
     assert_eq!(
@@ -522,9 +520,9 @@ shared!(delegated_custody_refuses_every_root_operation, {
 shared!(rotation_shuts_out_an_old_delegation, {
     let mut f = Fixture::new().await;
     let board = member("board");
-    let (_, old) = f.delegate(&[board.clone()]).await;
+    let (_, old) = f.delegate(std::slice::from_ref(&board)).await;
     f.rotate_out(old.device_public_key()).await;
-    let (_, new) = f.delegate(&[board.clone()]).await;
+    let (_, new) = f.delegate(std::slice::from_ref(&board)).await;
     assert_eq!(old.lineage().epoch, 1);
     assert_eq!(new.lineage().epoch, 2);
     assert!(!new.lineage().devices.contains(&old.device_public_key()));
@@ -584,8 +582,8 @@ shared!(sealed_bytes_round_trip_and_refuse_tampering, {
 shared!(rotation_seals_nothing_to_a_delegate, {
     let mut f = Fixture::new().await;
     let board = member("board");
-    let (_, kept) = f.delegate(&[board.clone()]).await;
-    let (_, removed) = f.delegate(&[board.clone()]).await;
+    let (_, kept) = f.delegate(std::slice::from_ref(&board)).await;
+    let (_, removed) = f.delegate(std::slice::from_ref(&board)).await;
     f.keys
         .prepare_rotation(removed.device_public_key(), CEREMONY)
         .await
