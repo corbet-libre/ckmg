@@ -44,8 +44,12 @@ and DHT copies loses identity and data equally for every passkey.
 
 Optional `passport` support lends an opaque `HolderSeed` after fresh authorization.
 Wallet consumes it to initialize the maintained Pseudonyms holder, then owns every
-passport operation and checkpoint. Keys has no Wallet dependency, installed holder,
-raw seed getter or raw callback. Durable passport and real network restore remain
+passport operation and checkpoint. In the default build and with `passport` alone,
+Keys has no Wallet dependency; in no build does it hold an installed holder, a raw
+seed getter or a raw callback. The optional `wallet-engine` feature adds a dependency
+on the Wallet engine crate (`cwlt-engine`, from the `cwlt` repository) for
+`Keys::wallet_engine`, which freshly authorizes custody and constructs that engine
+for the caller. Durable passport and real network restore remain
 acceptance obligations; this leaf alone proves no DHT retention.
 
 ## Cryptographic operations
