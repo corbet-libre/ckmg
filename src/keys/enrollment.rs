@@ -68,6 +68,7 @@ impl EnrollmentSeed {
             root: vld0::public_key(material.root()?),
             identity: material.identity.as_ref().map(vld0::public_key),
             devices: vec![device],
+            delegates: Vec::new(),
             signature: empty_signature(),
         };
         lineage.signature = vld0::sign(material.root()?, &lineage.signed_bytes()?)?;

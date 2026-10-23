@@ -93,6 +93,18 @@ resolutions and the exact reviewed source/dependency revisions.
   targets. Keep Veilid-derived MPL material isolated. Reference tests using the same
   upstream primitives are interoperability evidence, not independent crypto review.
 
+- Device delegation (`delegate_device`, `unlock_delegated`): confirm the delegation
+  holds no root, identity, history, ring key, PRF or PRF expansion (byte test and
+  compile-fail doctests in `src/keys/delegation.rs`); that Delegated custody refuses
+  every root, identity, lineage, pairing, rotation, history and record operation
+  (`loaded()` returns NoRoot there, so only explicit delegated branches run); that
+  every delegated operation rechecks current authority for pub(K_d); that K_d sits
+  in `lineage.delegates`, so no rotation envelope, pairing grant, attestation or
+  peer certificate check ever accepts it; and that any rotation leaves every
+  delegation only previous-epoch secrets. The
+  caller must seal `to_sealed_bytes` before it leaves memory and enforce revocation
+  of K_d at the server per request.
+
 ## Boundary regression checks
 
 No `passkey::browser`, WebAuthn request/assertion types, credentials APIs or PRF

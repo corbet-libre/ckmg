@@ -276,6 +276,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let next = &open.metadata.lineage;
         let granted = match &receipt.change {
             Change::DeviceAuthorized(grant) => &grant.lineage,
+            Change::DeviceDelegated(lineage) => lineage,
             _ => return Err(Error::Unauthorized),
         };
         if open.metadata.output.as_ref() != Some(receipt)
@@ -287,6 +288,10 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             || previous.revision.checked_add(1) != Some(next.revision)
             || next.revision < 2
             || !previous.devices.iter().all(|d| next.devices.contains(d))
+            || !previous
+                .delegates
+                .iter()
+                .all(|d| next.delegates.contains(d))
         {
             return Err(Error::Unauthorized);
         }

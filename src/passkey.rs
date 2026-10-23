@@ -301,6 +301,14 @@ impl HolderSeed<'_> {
 pub struct StoreCipher(Secret);
 
 impl StoreCipher {
+    /// Only Keys custody and its delegation construct a common-root cipher.
+    pub(crate) fn from_secret(secret: Secret) -> Self {
+        Self(secret)
+    }
+    /// The wrapping key for the delegation's own sealed form; never public.
+    pub(crate) fn secret(&self) -> &Secret {
+        &self.0
+    }
     #[cfg(feature = "profile-envelope")]
     pub(crate) fn envelope_legacy_key(&self) -> &[u8; 32] {
         &self.0

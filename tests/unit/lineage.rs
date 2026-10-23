@@ -17,6 +17,7 @@ fn historical_lineage_keeps_its_original_domain_and_serialized_fields() {
         root,
         identity: None,
         devices: vec![device],
+        delegates: Vec::new(),
         signature: Signature::new(crate::VLD0, [0; 64]),
     };
     let expected = data_encoding::HEXLOWER

@@ -167,6 +167,11 @@ pub enum Action {
     LendProfileCustody,
     /// Approve a pending device after authenticated, user-confirmed pairing.
     Pair,
+    /// Enrol a fresh device-generated delegation key (`target`) in the lineage without
+    /// sealing the root to it. `statement` digests the key and its purpose allowlist.
+    /// The evidence is the passkey ceremony this enrolment rides on; it never needs one
+    /// of its own. Grants the delegation only current-epoch purpose custody.
+    DelegateDevice,
     /// Remove a device and replace the root, without resetting the member pseudonym.
     Rotate,
     /// Adopt an authenticated lineage or root update.

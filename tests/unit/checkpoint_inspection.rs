@@ -18,6 +18,7 @@ fn fixture() -> (PrfOutput, Metadata, Material) {
         root,
         identity: Some(root),
         devices: vec![vld0::public_key(&material.device)],
+        delegates: Vec::new(),
         signature: empty_signature(),
     };
     lineage.signature =

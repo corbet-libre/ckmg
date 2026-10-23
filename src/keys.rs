@@ -15,6 +15,7 @@ use zeroize::Zeroizing;
 mod account_device;
 mod account_signing;
 mod current_signing;
+mod delegation;
 mod enrollment;
 mod ephemeral;
 mod genesis;
@@ -30,6 +31,7 @@ enum CurrentCheck<'a> {
     AccountSigning,
 }
 pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
+pub use delegation::{DeviceDelegation, MAX_DELEGATED_PURPOSES};
 pub(crate) use enrollment::WALLET_COMMUNITY;
 pub use enrollment::{
     EnrollmentSeed, UnenrolledCreation, wallet_birth_device_payload, wallet_birth_passport_payload,
@@ -62,6 +64,9 @@ pub enum State {
     MissingCheckpoint,
     /// This logical device has been removed; no root is retained.
     Revoked,
+    /// Opened from a `DeviceDelegation`: no root, identity, history or checkpoint key is
+    /// held. Only delegated purpose operations and the delegation key's own purposes work.
+    Delegated,
 }
 
 /// Private local device metadata. Serialized only inside the encrypted checkpoint.
@@ -182,7 +187,8 @@ impl Receipt {
             Change::Created(lineage)
             | Change::Restored(lineage)
             | Change::Paired(lineage)
-            | Change::Adopted(lineage) => lineage,
+            | Change::Adopted(lineage)
+            | Change::DeviceDelegated(lineage) => lineage,
             Change::DeviceAuthorized(grant) => &grant.lineage,
             Change::Rotated(rotation) => &rotation.lineage,
             Change::PairingRequested(_) | Change::Revoked(_) => return Err(Error::Unauthorized),
@@ -214,6 +220,8 @@ pub enum Change {
     Adopted(Lineage),
     /// Current device removed and local root erased.
     Revoked(Lineage),
+    /// Root-signed lineage revision adding a delegation key; no root was sealed.
+    DeviceDelegated(Lineage),
 }
 
 /// Source of the current shared root when reconstituting an absent checkpoint.
@@ -394,6 +402,7 @@ pub struct Keys<S, C, R, A> {
     state: State,
     open: Option<Open>,
     prepared: Option<Prepared>,
+    delegated: Option<delegation::Delegated>,
     last_time: u64,
     genesis: Option<genesis::InitialPublication>,
     #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
@@ -422,6 +431,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             state: State::Locked,
             open: None,
             prepared: None,
+            delegated: None,
             last_time: 0,
             genesis: None,
             #[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
@@ -445,6 +455,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.browser_tor_custody.close();
         self.open = None;
         self.prepared = None;
+        self.delegated = None;
         self.genesis = None;
         self.state = State::Locked;
     }
@@ -469,6 +480,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             State::Prepared => Err(Error::Pending),
             State::Reconcile => Err(Error::Reconcile),
             State::Locked | State::MissingCheckpoint => Err(Error::Locked),
+            // Delegated custody holds no checkpoint, root or identity: every path that
+            // needs loaded custody refuses here, so only explicit delegated branches work.
+            State::Delegated => Err(Error::NoRoot),
             _ => self.open.as_ref().ok_or(Error::Locked),
         }
     }
@@ -705,6 +719,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             root: vld0::public_key(material.root()?),
             identity: material.identity.as_ref().map(vld0::public_key),
             devices: vec![device],
+            delegates: Vec::new(),
             signature: empty_signature(),
         };
         lineage.signature = vld0::sign(material.root()?, &lineage.signed_bytes()?)?;
@@ -993,6 +1008,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     }
 
     fn require_locked(&self) -> Result<(), Error> {
+        if self.state == State::Delegated {
+            return Err(Error::Unauthorized);
+        }
         if !matches!(self.state, State::Locked | State::MissingCheckpoint) {
             return Err(Error::Pending);
         }
@@ -1268,6 +1286,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
 
     /// Return current public lineage after checking local freshness and live authority.
     pub async fn lineage(&mut self) -> Result<Lineage, Error> {
+        if self.state == State::Delegated {
+            return self.delegated_lineage().await;
+        }
         self.authorize(Action::Use, None, None, &[]).await?;
         Ok(self.loaded()?.metadata.lineage.clone())
     }
@@ -1275,6 +1296,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Read only the current lineage device key under fresh authority. This does
     /// not lend a signer or consume a signing intent.
     pub async fn device_public_key(&mut self) -> Result<PublicKey, Error> {
+        if self.state == State::Delegated {
+            return Ok(self.delegated_lineage_device().await?);
+        }
         self.authorize(Action::Use, None, None, &[]).await?;
         self.refresh().await?;
         self.now()?;
@@ -1449,6 +1473,10 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             || next.epoch != previous.epoch
             || next.revision <= previous.revision
             || !previous.devices.iter().all(|d| next.devices.contains(d))
+            || !previous
+                .delegates
+                .iter()
+                .all(|d| next.delegates.contains(d))
         {
             return Err(Error::Unauthorized);
         }
@@ -1472,7 +1500,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.writable()?;
         let previous = self.loaded()?.metadata.lineage.clone();
         if revoked == vld0::public_key(&self.loaded()?.material.device)
-            || !previous.devices.contains(&revoked)
+            || !(previous.devices.contains(&revoked) || previous.delegates.contains(&revoked))
         {
             return Err(Error::Unauthorized);
         }
@@ -1490,6 +1518,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         next.root = vld0::public_key(&root);
         next.revision = next.revision.checked_add(1).ok_or(Error::Limit)?;
         next.devices.retain(|d| *d != revoked);
+        // Delegates stay listed but never get an envelope: only `next.devices` below.
+        next.delegates.retain(|d| *d != revoked);
         next.signature = vld0::sign(&root, &next.signed_bytes()?)?;
         let mut replacement = candidate.material.clone();
         replacement
@@ -1613,6 +1643,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             purpose.validate()?;
         }
         purpose.validate_shape()?;
+        if self.state == State::Delegated {
+            return self.delegated_key(purpose).await;
+        }
         if let Some(node) = node {
             // A durable pending receipt must be publishable before member
             // authority exists. This does not permit a prepared/uncertain write.
@@ -1662,6 +1695,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     }
 
     async fn check_handle(&mut self, handle: &KeyHandle) -> Result<(), Error> {
+        if self.state == State::Delegated {
+            return self.check_delegated_handle(handle).await;
+        }
         // Generic purpose APIs never act for a reserved purpose: `tor.*` handles work only
         // through the node and Tor APIs (`check_transport_handle`), `vault.*`/`ckmg.*` never.
         if handle.certificate.purpose.is_reserved() {
@@ -1717,10 +1753,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             return Err(Error::Limit);
         }
         self.check_handle(handle).await?;
-        vld0::sign(
-            &purpose_secret(self.loaded()?, &handle.certificate.purpose, false)?,
-            transcript,
-        )
+        vld0::sign(&self.handle_secret(handle, false)?, transcript)
     }
 
     /// Plain Ed25519 for upstream formats such as OpenMLS and cgrd. The returned bytes
@@ -1735,7 +1768,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         }
         self.check_handle(handle).await?;
         Ok(vld0::sign_ed25519(
-            &purpose_secret(self.loaded()?, &handle.certificate.purpose, false)?,
+            &self.handle_secret(handle, false)?,
             transcript,
         ))
     }
@@ -1758,7 +1791,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         use_signer: impl for<'key> FnOnce(Ed25519Signer<'key>) -> T,
     ) -> Result<T, Error> {
         self.check_handle(handle).await?;
-        let secret = purpose_secret(self.loaded()?, &handle.certificate.purpose, false)?;
+        let secret = self.handle_secret(handle, false)?;
         Ok(use_signer(Ed25519Signer {
             secret: &secret,
             public_key: *handle.certificate.key.value(),
@@ -1836,7 +1869,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         use_cipher: impl for<'key> FnOnce(crate::Vld0RecordCipher<'key>) -> T,
     ) -> Result<T, Error> {
         self.check_handle(handle).await?;
-        let purpose = purpose_secret(self.loaded()?, &handle.certificate.purpose, true)?;
+        let purpose = self.handle_secret(handle, true)?;
         let secret = Zeroizing::new(blake3::derive_key(
             "ckmg 2026-10 VLD0 record encryption v1",
             &*purpose,
@@ -1862,9 +1895,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         use_record: impl for<'key> FnOnce(Vld0Signer<'key>, crate::Vld0RecordCipher<'key>) -> T,
     ) -> Result<T, Error> {
         self.check_handle(handle).await?;
-        let current = self.loaded()?;
-        let signer = purpose_secret(current, &handle.certificate.purpose, false)?;
-        let purpose = purpose_secret(current, &handle.certificate.purpose, true)?;
+        let signer = self.handle_secret(handle, false)?;
+        let purpose = self.handle_secret(handle, true)?;
         let cipher = Zeroizing::new(blake3::derive_key(
             "ckmg 2026-10 VLD0 record encryption v1",
             &*purpose,
@@ -2196,9 +2228,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             return Err(Error::Limit);
         }
         self.check_handle(handle).await?;
-        let current = self.loaded()?;
-        let aad = purpose_aad(current, &handle.certificate.purpose, context)?;
-        let key = purpose_secret(current, &handle.certificate.purpose, true)?;
+        let (aad, key) = self.handle_aead(handle, context)?;
         let mut sealed = PURPOSE_HEADER.to_vec();
         sealed.extend_from_slice(&keyring::seal(&mut self.entropy, &key, &aad, plaintext)?);
         Ok(sealed)
@@ -2215,9 +2245,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             return Err(Error::Limit);
         }
         self.check_handle(handle).await?;
-        let current = self.loaded()?;
-        let aad = purpose_aad(current, &handle.certificate.purpose, context)?;
-        let key = purpose_secret(current, &handle.certificate.purpose, true)?;
+        let (aad, key) = self.handle_aead(handle, context)?;
         keyring::open(
             &key,
             &aad,
@@ -2498,19 +2526,29 @@ fn purpose_aad_at(
     epoch: u64,
     context: &[u8],
 ) -> Result<Vec<u8>, Error> {
+    purpose_context(
+        &current.metadata.lineage,
+        &current.material.device,
+        purpose,
+        epoch,
+        context,
+    )
+}
+
+fn purpose_context(
+    lineage: &Lineage,
+    device: &Secret,
+    purpose: &Purpose,
+    epoch: u64,
+    context: &[u8],
+) -> Result<Vec<u8>, Error> {
     let device = match purpose.scope() {
-        Scope::Device => Some(vld0::public_key(&current.material.device)),
+        Scope::Device => Some(vld0::public_key(device)),
         Scope::Member => None,
     };
     encode(
         b"ckmg.purpose.context.v1\0",
-        &(
-            &current.metadata.lineage.binding,
-            epoch,
-            device,
-            purpose,
-            context,
-        ),
+        &(&lineage.binding, epoch, device, purpose, context),
     )
 }
 

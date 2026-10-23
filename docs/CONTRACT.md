@@ -26,6 +26,8 @@ holder custody is installed only in its separately selected wallet scope.
 | `adopt_lineage` | Root-signed additions in the same epoch; no rollback, equal-revision replacement or removals. |
 | `prepare_rotation`, `commit`, `cancel_prepared` | Remove another device, generate a fresh random epoch root while preserving the common identity root, increment epoch/revision, old-root-sign succession and seal the new root to every survivor. Publish only after durable commit. |
 | `apply_rotation` | Verify exact predecessor and both root signatures. Surviving devices import only their own envelope; the removed device erases its root. |
+| `delegate_device` | PRF-unlocked Authorized custody, a closed member-purpose list and DelegateDevice authority (the ceremony it rides on). Generates K_d from Entropy, commits a root-signed lineage revision listing pub(K_d) in `lineage.delegates` (never `devices`; rotation seals nothing to delegates) without sealing a root (`DeviceDelegated` receipt), then returns the `DeviceDelegation`. |
+| `unlock_delegated` | Open read-only Delegated custody from a delegation: only delegated member purposes and K_d device purposes via `key`/`sign`/`sign_ed25519`/signer and record borrows/`seal`/`open`, plus `lineage` and `device_public_key`, each under fresh authority for pub(K_d). Everything else refuses (NoRoot/Unauthorized); nothing is written. |
 | `key` | Opaque session-bound purpose handle + device-signed public certificate. No raw key getters. Labels in the reserved namespaces `vault.`, `tor.` and `ckmg.` are internal (`Purpose::is_reserved`): `Purpose::new` refuses them, `key` derives only the two node purposes among them, and every generic purpose API refuses a reserved handle. The Vault's compound checkpoint record goes only through `native_checkpoint_record_initializer`. |
 | `sign`, `sign_ed25519` | Sign exact owner transcripts under a purpose capability. VLD0 Ed25519ph and plain Ed25519 have separate APIs and return types. |
 | `with_ed25519_signer` | Fresh asynchronous authority check, then a synchronous, borrowed plain-Ed25519 signer for an upstream engine. Only public key/sign operations; the purpose seed stays inside Keys and the signer cannot escape the callback. |
@@ -79,6 +81,8 @@ Locked → Authorized or PendingDevice on successful unlock; missing storage →
 MissingCheckpoint. Explicit authorized restoration, creation or pairing preparation → Prepared → committed
 Authorized/PendingDevice. PendingDevice → Authorized only through the exact grant.
 Authorized → Prepared → Authorized on root rotation. Applying removal → Revoked.
+Any state → Delegated through `unlock_delegated`; Delegated holds no checkpoint and only leaves by lock
+(or authority refusal → Locked/Revoked).
 Lock from any state wipes decrypted material. Uncertain/conflicting/cancelled write
 → Reconcile with no decrypted state. Unlock reconciles the actual stored winner.
 

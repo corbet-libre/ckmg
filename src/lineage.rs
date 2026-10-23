@@ -82,6 +82,11 @@ pub struct Lineage {
     pub identity: Option<PublicKey>,
     /// Unique authorized device keys, sorted by typed bytes.
     pub devices: Vec<PublicKey>,
+    /// Delegation keys from `Keys::delegate_device`, sorted and disjoint from `devices`.
+    /// A delegate receives no root envelope, pairing grant or attestation authority and
+    /// certifies no purpose key for peers; rotation keeps it unless it is the removed key.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegates: Vec<PublicKey>,
     /// Root signature over [`Self::signed_bytes`].
     pub signature: Signature,
 }
@@ -90,6 +95,23 @@ impl Lineage {
     /// Canonical transcript, independent of a transport's JSON formatting.
     pub fn signed_bytes(&self) -> Result<Vec<u8>, Error> {
         self.shape()?;
+        if !self.delegates.is_empty() {
+            // Only a version-2 lineage carries delegates (shape); a separate domain keeps
+            // every delegate-free transcript byte-identical to before.
+            return encode(
+                b"ckmg.lineage.v2.delegates\0",
+                &(
+                    self.version,
+                    &self.binding,
+                    self.epoch,
+                    self.revision,
+                    self.root,
+                    &self.devices,
+                    self.identity,
+                    &self.delegates,
+                ),
+            );
+        }
         if self.version == 2 {
             return encode(
                 b"ckmg.lineage.v2\0",
@@ -124,8 +146,18 @@ impl Lineage {
             || self.devices.is_empty()
             || self.devices.len() > MAX_DEVICES
             || self.devices.windows(2).any(|v| v[0] >= v[1])
+            || (!self.delegates.is_empty() && self.version != 2)
+            || self.delegates.len() > MAX_DEVICES
+            || self.delegates.windows(2).any(|v| v[0] >= v[1])
+            || self.delegates.iter().any(|d| self.devices.contains(d))
         {
             return Err(Error::Encoding);
+        }
+        for delegate in &self.delegates {
+            vld0::validate_public_key(delegate)?;
+            if *delegate == self.root {
+                return Err(Error::InvalidKey);
+            }
         }
         vld0::validate_public_key(&self.root)?;
         if let Some(identity) = self.identity {
@@ -374,14 +406,22 @@ impl Rotation {
             .copied()
             .filter(|d| *d != self.revoked)
             .collect();
+        let delegates: Vec<_> = previous
+            .delegates
+            .iter()
+            .copied()
+            .filter(|d| *d != self.revoked)
+            .collect();
         if self.predecessor != previous.digest()?
             || self.previous_root != previous.root
             || self.lineage.binding != previous.binding
             || self.lineage.root == previous.root
             || self.lineage.epoch != previous.epoch.checked_add(1).ok_or(Error::Limit)?
             || self.lineage.revision != previous.revision.checked_add(1).ok_or(Error::Limit)?
-            || !previous.devices.contains(&self.revoked)
+            || !(previous.devices.contains(&self.revoked)
+                || previous.delegates.contains(&self.revoked))
             || self.lineage.devices != remaining
+            || self.lineage.delegates != delegates
         {
             return Err(Error::Unauthorized);
         }

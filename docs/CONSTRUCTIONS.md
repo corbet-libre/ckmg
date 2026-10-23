@@ -235,3 +235,37 @@ identity (lineage epochs start at 1). This unpublished path makes no compatibili
 claim for those older onion identities, or claim to inherit their runtime evidence.
 Every signing/DH or initializer request requires fresh fixed-purpose authority;
 refusal, clock regression or cancellation clears custody and stops its engines.
+
+## Device delegation (src/keys/delegation.rs)
+
+`Keys::delegate_device` draws a fresh delegation key K_d from the injected
+Entropy (`vld0::random_secret`, never a PRF expansion) and adds pub(K_d) to
+`lineage.delegates` (never `lineage.devices`) in a root-signed revision + 1 of
+the same epoch, sealing no root (`Change::DeviceDelegated`). A lineage with
+delegates signs under the separate transcript `ckmg.lineage.v2.delegates\0`
+(version 2 only, delegates sorted, disjoint from devices); a delegate-free
+lineage keeps its v1/v2 transcript byte for byte. Rotation seals the root
+transfer to `devices` only and keeps every delegate except a removed one;
+removing a delegate is an ordinary rotation. `KeyCertificate::verify` accepts
+devices only, so peers accept no purpose certificate from a delegate. The
+authority statement is BLAKE3 of
+`ckmg.device-delegation.v1\0 || JSON(pub(K_d), purposes)`.
+
+The delegation carries, for the epoch it was granted in, the common Store cipher
+(the compound wrapping construction above) and, per listed member purpose, the
+signing and encryption secrets of the unchanged purpose KDF. Member-purpose
+context has no device field, so these equal the secrets every enrolled device
+derives in that epoch. Device-scope purposes are not listed; in Delegated custody
+they derive from K_d with the same KDF. It carries no root, common identity,
+history, ring key, PRF or PRF expansion; identity-derived custody (profile
+storage, record recipient, holder seed, Wallet engine) is therefore unavailable.
+
+`to_sealed_bytes` is plaintext for the caller's sealed resume store:
+`ckmg.delegation.v1\0 || K_d || store key || u32le len || JSON(lineage) ||
+u16le count || (u16le len || JSON(purpose) || signing || encryption)*`, at most
+32 purposes and `MAX_CHECKPOINT_BYTES`. Parsing refuses truncation, trailing
+bytes, an unverifiable lineage, a K_d the lineage does not list and any purpose
+list `delegate_device` refuses. A root rotation changes the epoch root and with
+it every delegated secret; any delegation, kept or removed, holds only the
+secrets of the epoch it was granted in.
+
