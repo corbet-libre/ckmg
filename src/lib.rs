@@ -60,7 +60,7 @@ pub use keys::{
     EnrollmentSeed, InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys,
     LineageReadCapability, LineageReadCustody, OperationId, PendingCompletion, PendingCreation,
     ProvisionalLineage, Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation,
-    Vld0Signer, inspect_checkpoint, wallet_birth_device_payload, wallet_birth_passport_payload,
+    Vld0Signer, inspect_checkpoint,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,

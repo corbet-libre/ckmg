@@ -113,50 +113,6 @@ impl EnrollmentSeed {
     }
 }
 
-/// The wallet lineage's community name; its device key is the wallet device key `K`.
-pub(crate) const WALLET_COMMUNITY: &str = "wallet";
-
-fn length_prefixed(out: &mut Vec<u8>, field: &[u8]) -> Result<(), Error> {
-    let length = u32::try_from(field.len()).map_err(|_| Error::Limit)?;
-    out.extend_from_slice(&length.to_be_bytes());
-    out.extend_from_slice(field);
-    Ok(())
-}
-
-/// The exact payload the wallet device key `K` signs under
-/// [`DevicePurpose::WalletBirthDevice`] (the tag is prepended by the signer): every field
-/// length-prefixed (u32 big-endian) in the fixed order origin, account, credential id, seed
-/// commitment `c`, `K`. The server rebuilds it from its own records, never from client bytes.
-pub fn wallet_birth_device_payload(
-    origin: &str,
-    account: &str,
-    credential: &[u8],
-    commitment: &[u8; 32],
-    device: &[u8; 32],
-) -> Result<Vec<u8>, Error> {
-    let mut out = Vec::with_capacity(20 + origin.len() + account.len() + credential.len() + 64);
-    for field in [
-        origin.as_bytes(),
-        account.as_bytes(),
-        credential,
-        &commitment[..],
-        &device[..],
-    ] {
-        length_prefixed(&mut out, field)?;
-    }
-    if out.len() > MAX_MESSAGE_BYTES - DevicePurpose::WalletBirthDevice.tag().len() {
-        return Err(Error::Limit);
-    }
-    Ok(out)
-}
-
-/// The exact payload `K` signs under [`DevicePurpose::WalletBirthPassport`]: SHA-256 of the
-/// encoded passport issuance request bytes.
-pub fn wallet_birth_passport_payload(request: &[u8]) -> [u8; 32] {
-    use sha2::Digest as _;
-    sha2::Sha256::digest(request).into()
-}
-
 /// The closed set of things a device key may sign before activation, each under its own
 /// fixed domain tag that ckmg prepends (`UnenrolledCreation::sign_device`).
 ///
@@ -174,14 +130,6 @@ pub enum DevicePurpose {
     DeviceSession,
     /// A stamp salt derivation; the signature is only ever hashed, never published.
     SaltDerivation,
-    /// The wallet device's first binding during the one-ceremony registration
-    /// (`cvld.wallet-birth-device.v1`): `sig_K(tag ‖ origin ‖ account ‖ credential ‖ c ‖ K)`.
-    /// Only the wallet's own device key signs it (community `"wallet"`).
-    WalletBirthDevice,
-    /// The wallet device's consent to the passport issuance during the one-ceremony
-    /// registration (`cvld.wallet-birth-passport.v1`): `sig_K(tag ‖ H(issuance request))`
-    /// ([`wallet_birth_passport_payload`]). Only the wallet's own device key signs it.
-    WalletBirthPassport,
 }
 
 impl DevicePurpose {
@@ -191,17 +139,6 @@ impl DevicePurpose {
             Self::DeviceJoin => b"cvld.device-join.v1\0",
             Self::DeviceSession => b"cvld.device-session.v1\0",
             Self::SaltDerivation => b"cmsg.device-join.salt.v1\0",
-            Self::WalletBirthDevice => b"cvld.wallet-birth-device.v1\0",
-            Self::WalletBirthPassport => b"cvld.wallet-birth-passport.v1\0",
-        }
-    }
-
-    /// Whether a device key of `community` may sign this purpose at all. The wallet birth
-    /// binding names the wallet device key, so a community device key never signs it.
-    pub(crate) fn allowed_in(self, community: &str) -> bool {
-        match self {
-            Self::WalletBirthDevice | Self::WalletBirthPassport => community == WALLET_COMMUNITY,
-            Self::DeviceJoin | Self::DeviceSession | Self::SaltDerivation => true,
         }
     }
 
@@ -264,9 +201,6 @@ impl UnenrolledCreation {
     /// activate. The caller chooses neither the tag nor a raw transcript, so the signature
     /// is valid for exactly that purpose; after activation `Keys` signs.
     pub fn sign_device(&self, purpose: DevicePurpose, payload: &[u8]) -> Result<[u8; 64], Error> {
-        if !purpose.allowed_in(self.metadata.lineage.binding.community()) {
-            return Err(Error::Unauthorized);
-        }
         purpose.sign(&self.material.device, payload)
     }
 
