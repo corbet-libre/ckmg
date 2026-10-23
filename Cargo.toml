@@ -28,6 +28,8 @@ passport = ["dep:cpsd"]
 wallet-engine = ["dep:cwlt-engine"]
 wallet-native-prover = ["wallet-engine", "cwlt-engine/native-prover"]
 wallet-browser-prover = ["wallet-engine", "cwlt-engine/browser-prover"]
+# The wasm32 browser probe of the prover path; never part of a product build.
+wallet-browser-prover-probe = ["wallet-browser-prover", "cwlt-engine/browser-prover-probe"]
 profile-envelope = ["dep:cnvl"]
 native-records = ["dep:cvln"]
 native-tor = ["dep:ctrn", "dep:arti-client", "dep:tor-hscrypto", "dep:tor-llcrypto", "dep:tor-rtcompat"]
