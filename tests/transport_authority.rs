@@ -206,6 +206,16 @@ fn adjacent_labels_and_member_scope_cannot_obtain_transport_admission() {
             (Scope::Device, "profile"),
         ] {
             let mut f = fixture(false).await;
+            if label.starts_with("tor.") {
+                // Reserved labels outside the two node purposes never reach any authority.
+                assert_eq!(
+                    f.keys.key(wire_purpose(scope, label)).await.unwrap_err(),
+                    Error::InvalidPurpose
+                );
+                assert!(f.authority.calls.borrow().is_empty());
+                assert_eq!(f.keys.state(), State::Authorized);
+                continue;
+            }
             assert_eq!(
                 f.keys.key(purpose(scope, label)).await.unwrap_err(),
                 Error::Unavailable
@@ -228,7 +238,13 @@ fn node_borrow_refuses_wrong_purpose_before_authority_or_callback() {
         ] {
             let mut f = fixture(false).await;
             f.authority.member.set(true);
-            let handle = f.keys.key(purpose(scope, label)).await.unwrap();
+            let wire = wire_purpose(scope, label);
+            if wire.is_reserved() && NodePurpose::TorOnion.purpose(0).unwrap() != wire {
+                // A reserved non-node purpose yields no handle at all.
+                assert_eq!(f.keys.key(wire).await.unwrap_err(), Error::InvalidPurpose);
+                continue;
+            }
+            let handle = f.keys.key(wire).await.unwrap();
             f.authority.member.set(false);
             f.authority.calls.borrow_mut().clear();
             let called = Cell::new(false);
@@ -273,8 +289,16 @@ fn transport_handles_never_admit_member_operations() {
                     .map(|_| ()),
                 _ => f.keys.with_identity(|_| called.set(true)).await,
             };
-            assert_eq!(result, Err(Error::Unavailable));
             assert!(!called.get());
+            if operation < 2 {
+                // A node handle is reserved: generic purpose APIs refuse it before any
+                // authority (X3 M2).
+                assert_eq!(result, Err(Error::InvalidPurpose));
+                assert!(f.authority.calls.borrow().is_empty());
+                assert_eq!(f.keys.state(), State::Authorized);
+                continue;
+            }
+            assert_eq!(result, Err(Error::Unavailable));
             assert_eq!(*f.authority.calls.borrow(), vec![Action::Use]);
             assert_eq!(f.keys.state(), State::Locked);
         }
@@ -400,7 +424,7 @@ fn durable_pending_receipt_allows_transport_but_not_member_use_or_uncertain_stat
         );
         assert_eq!(
             f.keys.sign(&handle, b"member statement").await,
-            Err(Error::Pending)
+            Err(Error::InvalidPurpose)
         );
         assert_eq!(
             f.keys

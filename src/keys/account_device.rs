@@ -185,6 +185,7 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
                 &[],
                 Some(crate::DeviceSigning {
                     transcript: &plan.transcript,
+                    format: None,
                     expires,
                 }),
             )
@@ -208,6 +209,7 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
                 statement: None,
                 signing: Some(crate::DeviceSigning {
                     transcript: &plan.transcript,
+                    format: None,
                     expires,
                 }),
                 now,

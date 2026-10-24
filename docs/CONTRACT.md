@@ -26,11 +26,13 @@ holder custody is installed only in its separately selected wallet scope.
 | `adopt_lineage` | Root-signed additions in the same epoch; no rollback, equal-revision replacement or removals. |
 | `prepare_rotation`, `commit`, `cancel_prepared` | Remove another device, generate a fresh random epoch root while preserving the common identity root, increment epoch/revision, old-root-sign succession and seal the new root to every survivor. Publish only after durable commit. |
 | `apply_rotation` | Verify exact predecessor and both root signatures. Surviving devices import only their own envelope; the removed device erases its root. |
-| `key` | Opaque session-bound purpose handle + device-signed public certificate. No raw key getters. |
+| `key` | Opaque session-bound purpose handle + device-signed public certificate. No raw key getters. Labels in the reserved namespaces `vault.`, `tor.` and `ckmg.` are internal (`Purpose::is_reserved`): `Purpose::new` refuses them, `key` derives only the two node purposes among them, and every generic purpose API refuses a reserved handle. The Vault's compound checkpoint record goes only through `native_checkpoint_record_initializer`. |
 | `sign`, `sign_ed25519` | Sign exact owner transcripts under a purpose capability. VLD0 Ed25519ph and plain Ed25519 have separate APIs and return types. |
 | `with_ed25519_signer` | Fresh asynchronous authority check, then a synchronous, borrowed plain-Ed25519 signer for an upstream engine. Only public key/sign operations; the purpose seed stays inside Keys and the signer cannot escape the callback. |
 | `with_vld0_signer` | Borrow a distinct synchronous VLD0 purpose signer after fresh authorization; retain the original descriptor/value transcript bytes and VLD0_SIGN context. |
-| `with_device_ed25519_signer` | Borrow the actual lineage device signer after fresh authorization for owner formats such as profile publication. Its public key matches Lineage.devices; a purpose key is not a device substitute. |
+| `sign_device_ed25519_current` | The only Keys path that signs with the device key: one exact-admitted transcript in one `DeviceFormat` of class `Admitted`, led by that format's tag. No raw device signer exists. |
+| `with_profile_custody` | Lend the Profile signer (only the cpfl publication and cgrd bundle formats) and Envelope custody keyed by the certified Device-scope `ckmg.profile.hpke` purpose key, never the device scalar. |
+| `device_salt` | The stamp salt `SHA-256(Ed25519(device, salt tag ‖ payload))`; the signature never leaves Keys and no signer accepts the salt tag. |
 | `with_holder_seed` | With feature passport, lend a one-use opaque holder initializer after fresh current authorization. Wallet consumes it and owns the resulting maintained engine; no byte/RNG getter or raw callback exists. |
 | `seal`, `open` | Purpose encryption with context as AAD. Member scope works across paired devices; device scope is independent. |
 | `lineage`, `device_info` | Fresh authorized access to public lineage or local private name/authority reference. Names/references never enter public outputs. |
@@ -214,28 +216,63 @@ Every new durable Keys Receipt additionally carries a VLD0 device attestation ov
 Keys::retained_checkpoint exports only the exact already-durable PRF-encrypted Keys checkpoint after current authority and generation verification. RestoreRoot::Checkpoint reuses that existing format and AEAD; it requires authoritative local absence plus independently authenticated current lineage/device authority, validates all retained material, refuses wrong PRF/scope, revoked/pending devices, root/epoch/identity mismatch and clock rollback. It can restore the original passkey's random root just like every enrolled passkey, but cannot restore without a retained copy. Vault may place this opaque wrapped payload in its passkey record after compression/padding; packed-size refusal is a retention failure, never pruning or a new identity. No MLS ratchet or Wallet state is copied by this Keys operation.
 
 
-### Exact device signing admission
+### Device formats and exact device signing admission
+
+Every device-key signature (PRF device seed or a delegated device key) goes over a message
+led by exactly one `DeviceFormat::tag()`, through a signer whose `SigningClass` allows that
+format. The tags are the leading bytes the verifiers rebuild, so the wire is unchanged:
+
+| Format | Tag | Classes |
+|---|---|---|
+| `DeviceJoin` | `cvld.device-join.v1\0` | Enrollment, Provenance |
+| `DeviceSession` | `cvld.device-session.v1\0` | Enrollment, Opening, Admitted, Delegate |
+| `GardenSession` | `cvld.garden-session.v1\0` | Admitted |
+| `PairingPossession` | `cvld.device-pairing-possession.v1\0` | none yet (the step-bound pairing signer) |
+| `PairingApproval` | `cvld.device-pairing-approval.v1\0` | Admitted |
+| `AccountRequest` | `cfrm.account.request.v1\0` | Admitted |
+| `RecordRecipient` | `["cblc.record-recipient.v1",` | Admitted |
+| `AccountingDelegation` | `["cmsg.accounting-delegation.v1",` | Admitted |
+| `ForumChallenge` | `["cswb.challenge.v1",` | Admitted |
+| `ForumRequest` | `["cswb.request.v1",` | Admitted |
+| `GroupConsent` | `["cgrp.consent.v4",` | Admitted |
+| `Endorsement` | `cvch.endorsement.v3\n` | Admitted |
+| `ThreadInvitation` | `0x13 cthr.invitation.v1\0` (postcard string) | Admitted |
+| `ProfilePublication` | `cpfl:publication:v1\0` | Profile |
+| `ProfileBundle` | `cgrd:bundle:v1\0` | Profile |
+| `WalletBirthDevice` | `cvld.wallet-birth-device.v1\0` | Enrollment, Opening; wallet scope only |
+| `WalletBirthPassport` | `cvld.wallet-birth-passport.v1\0` | Enrollment, Opening; wallet scope only |
+
+The two birth formats name the wallet device key `K`: the format check itself refuses any signing
+scope but the wallet lineage's (`UnenrolledCreation::sign_device`, `passkey::sign_device_birth`),
+and every other class (Provenance, Admitted, Profile, Delegate) refuses them.
+
+Every tag is `name T` (`T` is NUL or newline), `["name",`, or a postcard string `n name\0`
+whose one length byte `n` lies below `[`; a name is `[a-z][a-z0-9._:-]*`, so no tag
+prefixes another (enforced over `DeviceFormat::ALL` and the
+salt tag by test). A signature accepted for two formats would make one tag a prefix of the
+other. The stamp-salt tag `cmsg.device-join.salt.v1\0` is no format: ckmg returns only
+`SHA-256` of that signature (`device_salt`), byte-identical to cmsg's former `derived_salt`.
 
 `device_public_key().await` reads public metadata under current `Action::Use`
-authority without lending a signer. `sign_device_ed25519(transcript, expires).await`
-requests `Action::SignDeviceEd25519` with `Authorization::signing =
-Some(DeviceSigning { transcript, expires })`. The caller passes original immutable
-owner-prepared bytes and the original exclusive local grant deadline; no new
-digest, wire envelope or callback is introduced. `AdmittedCommand::transcript`
-contains these exact bytes. The fixed `AuthorizeAccountDevice` operation below
-also requires its exact transcript. Other actions require `transcript: None`.
-The original intent channel consumes one attempt, including byte/deadline/action
-mismatch, and remains reserved until its guard drops. The trusted authority must
-validate actual current G3, ensure the deadline does not outlive that authority,
-recheck deadlines after its awaits, then consume intent. Intent alone is never G3.
-Keys rechecks the actual checkpoint generation and clock after authorization and
-refuses an expired deadline before signing those same bytes. No signature leaves
-on refusal; the guard stays in the composer through remote child completion.
+authority without lending a signer. `sign_device_ed25519_current(format, transcript,
+expires).await` refuses a transcript not led by `format.tag()` or a format exact admission
+may not sign, then requests `Action::SignDeviceEd25519` with `Authorization::signing =
+Some(DeviceSigning { transcript, format: Some(format), expires })`. The caller passes
+original immutable owner-prepared bytes and the original exclusive local grant deadline.
+`AdmittedCommand::transcript` and `AdmittedCommand::format` contain these exact bytes and
+this format; admission refuses a device-signing command without a matching format. The
+fixed `AuthorizeAccountDevice` operation below also requires its exact transcript and no
+format. Other actions require `transcript: None`. The original intent channel consumes one
+attempt, including byte/format/deadline/action mismatch, and remains reserved until its
+guard drops. The trusted authority must validate actual current G3, ensure the deadline
+does not outlive that authority, recheck deadlines after its awaits, then consume intent;
+Keys then reborrows the retained owner in `check_device_signing_current` after its last
+Store await. Intent alone is never G3. No signature leaves on refusal; the guard stays in
+the composer through remote child completion.
 
-The existing synchronous Profile signer lender now requests the distinct
-`Action::LendDeviceSigner`. `Use` reads or an exact signing admission cannot grant
-that broader capability; a production adapter must explicitly admit its original
-owner operation or refuse it. Board consumers must use the narrow signing method.
+The Profile signer is lent only with Profile custody (`Action::LendProfileCustody`) and
+signs only the Profile formats. `Action::LendDeviceSigner` is no longer requested: Keys
+lends no raw device signer.
 
 With feature `wallet-engine`, `Keys::wallet_engine().await` freshly authorizes
 custody and constructs the original internal Wallet Engine with its retained

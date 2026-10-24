@@ -410,7 +410,7 @@ pub struct KeyCertificate {
 
 impl KeyCertificate {
     pub(crate) fn signed_bytes(&self) -> Result<Vec<u8>, Error> {
-        self.purpose.validate()?;
+        self.purpose.validate_shape()?;
         vld0::validate_public_key(&self.key)?;
         encode(
             b"ckmg.purpose.certificate.v1\0",

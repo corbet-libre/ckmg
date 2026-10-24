@@ -308,7 +308,12 @@ fn original_owner(
         metadata: metadata.clone(),
         material: material.clone(),
     };
-    let purpose = Purpose::new(Scope::Member, label, 0).unwrap();
+    // The record purposes are reserved: callers cannot name them (X3 M2).
+    assert_eq!(
+        Purpose::new(Scope::Member, label, 0).unwrap_err(),
+        Error::InvalidPurpose
+    );
+    let purpose = Purpose::reserved(Scope::Member, label, 0).unwrap();
     vld0::public_key(&purpose_secret(&original, &purpose, false).unwrap())
 }
 

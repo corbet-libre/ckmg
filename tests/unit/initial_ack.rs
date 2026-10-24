@@ -275,16 +275,31 @@ shared!(
         assert_eq!(actual.to_bytes().unwrap(), expected.to_bytes().unwrap());
         assert_eq!(actual.operation(), receipt.operation);
         // The authenticated ACK is the restored device's only route to a join signature: the
-        // device key's DeviceJoin signature, while the opening signer still refuses it.
+        // device key's DeviceJoin signature (the opening signs only the session).
         let device = passkey::device_public_key(&prf, COMMUNITY).unwrap();
         let signature = actual
             .sign_device_join_restored(&prf, COMMUNITY, PAYLOAD)
             .unwrap();
-        let tagged = [DevicePurpose::DeviceJoin.tag(), PAYLOAD].concat();
+        let tagged = [crate::DeviceFormat::DeviceJoin.tag(), PAYLOAD].concat();
         vld0::verify_ed25519(device.value(), &tagged, &signature).unwrap();
-        assert_eq!(
-            passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::DeviceJoin, PAYLOAD),
-            Err(Error::Unauthorized)
+        // X3 M4: the provenance binds its own location and device. A scope-A provenance
+        // never signs a join for another community or another PRF, and the creation-time
+        // provenance (no acknowledged checkpoint yet) signs nothing.
+        assert!(
+            actual
+                .sign_device_join_restored(&prf, "another-community", PAYLOAD)
+                .is_err()
+        );
+        let other = passkey::PrfOutput::from_bytes(&[0x5a; 32]).unwrap();
+        assert!(
+            actual
+                .sign_device_join_restored(&other, COMMUNITY, PAYLOAD)
+                .is_err()
+        );
+        assert!(
+            expected
+                .sign_device_join_restored(&prf, COMMUNITY, PAYLOAD)
+                .is_err()
         );
         assert_eq!(reopened.inspect(&acknowledged).unwrap().revision(), 2);
         assert_eq!(

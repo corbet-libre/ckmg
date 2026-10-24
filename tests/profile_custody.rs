@@ -28,7 +28,7 @@ fn common_root_profile_custody_restores_under_an_equal_paired_passkey() {
         create(&mut a, &guard, &prf(1), &binding("a")).await;
         let (envelope, wrapped) = a
             .with_profile_custody(|signer, custody| {
-                assert_eq!(signer.hpke_public_key().unwrap(), custody.public_key());
+                assert_eq!(signer.hpke_public_key(), custody.public_key());
                 let (envelope, key) = custody.seal(context(), b"original packed profile").unwrap();
                 (envelope, key.wrap().unwrap())
             })

@@ -15,15 +15,35 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Drop for Attempt<'_, S,
 }
 
 impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
-    /// Sign the original borrowed transcript only after exact one-use intent,
-    /// asynchronous G3 and a final synchronous retained-owner recheck after the
-    /// last checkpoint await. No signer or key escapes. Failure or cancellation
-    /// wipes this live attempt, including cancellation during a Store read.
+    /// Sign the original borrowed transcript in one admitted device format only after
+    /// exact one-use intent (for these bytes, this format and this deadline), asynchronous G3
+    /// and a final synchronous retained-owner recheck after the last checkpoint await. The
+    /// transcript must be led by `format`'s tag and `format` must allow exact admission
+    /// (`SigningClass::Admitted`); every other message is refused before authorization. No
+    /// signer or key escapes. Failure or cancellation wipes this live attempt, including
+    /// cancellation during a Store read. This is the only Keys path that signs with the
+    /// device key; no raw device signer exists.
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn raw<S: SecureStore, C: Clock, R: Entropy, A: Authority>(keys: &mut Keys<S, C, R, A>) {
+    /// let _ = keys.sign_device_ed25519(b"cvld.device-join.v1\0payload", 1).await;
+    /// # }
+    /// ```
+    ///
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn lent<S: SecureStore, C: Clock, R: Entropy, A: Authority>(keys: &mut Keys<S, C, R, A>) {
+    /// let _ = keys.with_device_ed25519_signer(|signer| signer.sign(b"any")).await;
+    /// # }
+    /// ```
     pub async fn sign_device_ed25519_current(
         &mut self,
+        format: crate::DeviceFormat,
         transcript: &[u8],
         expires: u64,
     ) -> Result<[u8; 64], Error> {
+        format.admit(crate::SigningClass::Admitted, None, transcript)?;
         self.writable()?;
         let mut attempt = Attempt {
             keys: self,
@@ -31,6 +51,7 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
         };
         let signing = crate::DeviceSigning {
             transcript,
+            format: Some(format),
             expires,
         };
         attempt
@@ -74,11 +95,13 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
             return Err(Error::Expired);
         }
         let secret = &attempt.keys.loaded()?.material.device;
-        let signature = Ed25519Signer {
+        let signature = crate::format::sign(
             secret,
-            public_key: *device.value(),
-        }
-        .sign(transcript)?;
+            format,
+            crate::SigningClass::Admitted,
+            None,
+            transcript,
+        )?;
         attempt.accepted = true;
         Ok(signature)
     }

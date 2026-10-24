@@ -125,7 +125,7 @@ fn length_prefixed(out: &mut Vec<u8>, field: &[u8]) -> Result<(), Error> {
 }
 
 /// The exact payload the wallet device key `K` signs under
-/// [`DevicePurpose::WalletBirthDevice`] (the tag is prepended by the signer): every field
+/// [`DeviceFormat::WalletBirthDevice`] (the tag is prepended by the signer): every field
 /// length-prefixed (u32 big-endian) in the fixed order origin, account, credential id, seed
 /// commitment `c`, `K`. The server rebuilds it from its own records, never from client bytes.
 pub fn wallet_birth_device_payload(
@@ -145,78 +145,17 @@ pub fn wallet_birth_device_payload(
     ] {
         length_prefixed(&mut out, field)?;
     }
-    if out.len() > MAX_MESSAGE_BYTES - DevicePurpose::WalletBirthDevice.tag().len() {
+    if out.len() > MAX_MESSAGE_BYTES - crate::DeviceFormat::WalletBirthDevice.tag().len() {
         return Err(Error::Limit);
     }
     Ok(out)
 }
 
-/// The exact payload `K` signs under [`DevicePurpose::WalletBirthPassport`]: SHA-256 of the
+/// The exact payload `K` signs under [`DeviceFormat::WalletBirthPassport`]: SHA-256 of the
 /// encoded passport issuance request bytes.
 pub fn wallet_birth_passport_payload(request: &[u8]) -> [u8; 32] {
     use sha2::Digest as _;
     sha2::Sha256::digest(request).into()
-}
-
-/// The closed set of things a device key may sign before activation, each under its own
-/// fixed domain tag that ckmg prepends (`UnenrolledCreation::sign_device`).
-///
-/// ```compile_fail
-/// // No raw transcript and no caller-chosen tag: a purpose is required.
-/// fn raw(candidate: &ckmg::UnenrolledCreation) {
-///     let _ = candidate.sign_device(b"cvld.device-join.v1\0");
-/// }
-/// ```
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DevicePurpose {
-    /// The community's device-join message (`cvld.device-join.v1`).
-    DeviceJoin,
-    /// The community's device-session message (`cvld.device-session.v1`).
-    DeviceSession,
-    /// A stamp salt derivation; the signature is only ever hashed, never published.
-    SaltDerivation,
-    /// The wallet device's first binding during the one-ceremony registration
-    /// (`cvld.wallet-birth-device.v1`): `sig_K(tag ‖ origin ‖ account ‖ credential ‖ c ‖ K)`.
-    /// Only the wallet's own device key signs it (community `"wallet"`).
-    WalletBirthDevice,
-    /// The wallet device's consent to the passport issuance during the one-ceremony
-    /// registration (`cvld.wallet-birth-passport.v1`): `sig_K(tag ‖ H(issuance request))`
-    /// ([`wallet_birth_passport_payload`]). Only the wallet's own device key signs it.
-    WalletBirthPassport,
-}
-
-impl DevicePurpose {
-    /// The fixed domain tag prepended to every payload of this purpose.
-    pub const fn tag(self) -> &'static [u8] {
-        match self {
-            Self::DeviceJoin => b"cvld.device-join.v1\0",
-            Self::DeviceSession => b"cvld.device-session.v1\0",
-            Self::SaltDerivation => b"cmsg.device-join.salt.v1\0",
-            Self::WalletBirthDevice => b"cvld.wallet-birth-device.v1\0",
-            Self::WalletBirthPassport => b"cvld.wallet-birth-passport.v1\0",
-        }
-    }
-
-    /// Whether a device key of `community` may sign this purpose at all. The wallet birth
-    /// binding names the wallet device key, so a community device key never signs it.
-    pub(crate) fn allowed_in(self, community: &str) -> bool {
-        match self {
-            Self::WalletBirthDevice | Self::WalletBirthPassport => community == WALLET_COMMUNITY,
-            Self::DeviceJoin | Self::DeviceSession | Self::SaltDerivation => true,
-        }
-    }
-
-    /// Plain Ed25519 over `tag() || payload` with `device`; the secret never leaves the crate.
-    pub(crate) fn sign(self, device: &Secret, payload: &[u8]) -> Result<[u8; 64], Error> {
-        let tag = self.tag();
-        if payload.len() > MAX_MESSAGE_BYTES - tag.len() {
-            return Err(Error::Limit);
-        }
-        let mut message = Vec::with_capacity(tag.len() + payload.len());
-        message.extend_from_slice(tag);
-        message.extend_from_slice(payload);
-        Ok(vld0::sign_ed25519(device, &message))
-    }
 }
 
 /// Authenticated original revision-zero material, never accepted custody.
@@ -259,16 +198,36 @@ impl UnenrolledCreation {
             .passkey_challenge()
     }
 
-    /// Sign `payload` with this candidate's device key under the fixed domain tag of
-    /// `purpose` (plain Ed25519 over `purpose.tag() || payload`). The only device signer
-    /// before activation: a device-key member must join and open its session before it can
-    /// activate. The caller chooses neither the tag nor a raw transcript, so the signature
-    /// is valid for exactly that purpose; after activation `Keys` signs.
-    pub fn sign_device(&self, purpose: DevicePurpose, payload: &[u8]) -> Result<[u8; 64], Error> {
-        if !purpose.allowed_in(self.metadata.lineage.binding.community()) {
-            return Err(Error::Unauthorized);
-        }
-        purpose.sign(&self.material.device, payload)
+    /// Sign `payload` with this candidate's device key under the fixed tag of `format`
+    /// (plain Ed25519 over `format.tag() || payload`). The only device signer before
+    /// activation: a device-key member must join and open its session before it can
+    /// activate, so only `DeviceJoin` and `DeviceSession` (class `Enrollment`). The caller
+    /// chooses neither the tag nor a raw transcript; after activation `Keys` signs.
+    ///
+    /// ```compile_fail
+    /// // No raw transcript and no caller-chosen tag: a format is required.
+    /// fn raw(candidate: &ckmg::UnenrolledCreation) {
+    ///     let _ = candidate.sign_device(b"cvld.device-join.v1\0");
+    /// }
+    /// ```
+    pub fn sign_device(
+        &self,
+        format: crate::DeviceFormat,
+        payload: &[u8],
+    ) -> Result<[u8; 64], Error> {
+        crate::format::sign_payload(
+            &self.material.device,
+            format,
+            crate::SigningClass::Enrollment,
+            Some(self.metadata.lineage.binding.community()),
+            payload,
+        )
+    }
+
+    /// This candidate's stamp salt over `payload`: `SHA-256(Ed25519(device, salt tag ||
+    /// payload))`. The signature never leaves ckmg.
+    pub fn device_salt(&self, payload: &[u8]) -> Result<[u8; 32], Error> {
+        crate::format::device_salt(&self.material.device, payload)
     }
 
     /// Compare only against an authenticated original pending checkpoint. This

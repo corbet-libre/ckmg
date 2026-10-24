@@ -1218,28 +1218,6 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         .unwrap();
         assert_ne!(actual, vld0);
         assert!(verify_ed25519(&public, b"OpenMLS transcript", &vld0).is_err());
-        let lineage = keys.lineage().await.unwrap();
-        let (device, proof) = keys
-            .with_device_ed25519_signer(|signer| {
-                let public = *signer.public_key();
-                assert_eq!(
-                    signer.hpke_public_key().unwrap(),
-                    ed25519_dalek::VerifyingKey::from_bytes(&public)
-                        .unwrap()
-                        .to_montgomery()
-                        .to_bytes()
-                );
-                assert_eq!(
-                    signer.sign(&vec![0; MAX_MESSAGE_BYTES + 1]),
-                    Err(Error::Limit)
-                );
-                (public, signer.sign(b"original profile transcript").unwrap())
-            })
-            .await
-            .unwrap();
-        assert!(lineage.devices.contains(&PublicKey::new(VLD0, device)));
-        assert_ne!(device, public);
-        verify_ed25519(&device, b"original profile transcript", &proof).unwrap();
         guard.0.borrow_mut().get_mut("a").unwrap().devices.clear();
         let called = std::cell::Cell::new(false);
         assert!(
@@ -1249,12 +1227,6 @@ fn synchronous_signer_is_scoped_bounded_and_rechecks_current_authority() {
         );
         assert!(!called.get());
         assert_eq!(keys.state(), State::Revoked);
-        assert!(
-            keys.with_device_ed25519_signer(|_| called.set(true))
-                .await
-                .is_err()
-        );
-        assert!(!called.get());
     });
 }
 
@@ -1413,8 +1385,14 @@ fn node_signer_and_cipher_share_the_actual_device_purpose_across_pairing_and_res
         let mut right = machine(&right_store, &time, &guard, 152);
         create(&mut left, &guard, &prf(1), &binding("a")).await;
         pair(&mut left, &mut right, &guard, &prf(2)).await;
-        let left_handle = left.key(purpose(Scope::Device, "tor.node")).await.unwrap();
-        let right_handle = right.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let left_handle = left
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
+        let right_handle = right
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
         let left_public = *left_handle.certificate().key.value();
         let right_public = *right_handle.certificate().key.value();
         assert_ne!(left_public, right_public);
@@ -1458,7 +1436,10 @@ fn node_signer_and_cipher_share_the_actual_device_purpose_across_pairing_and_res
         // node identity while requiring a freshly issued session handle.
         right.lock();
         right.unlock(&prf(2), "a").await.unwrap();
-        let restored = right.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let restored = right
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
         assert_eq!(*restored.certificate().key.value(), right_public);
         assert_eq!(
             &*right
@@ -1483,11 +1464,23 @@ fn node_capability_rejects_member_scope_other_community_and_stale_session_before
         let mut other = machine(&store, &time, &guard, 154);
         create(&mut keys, &guard, &prf(1), &binding("a")).await;
         create(&mut other, &guard, &prf(2), &binding("b")).await;
-        let member = keys.key(purpose(Scope::Member, "tor.node")).await.unwrap();
-        let node = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
-        let foreign = other.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        // A member-scope `tor.node` purpose is reserved: no handle exists at all.
+        assert_eq!(
+            keys.key(wire_purpose(Scope::Member, "tor.node"))
+                .await
+                .unwrap_err(),
+            Error::InvalidPurpose
+        );
+        let node = keys
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
+        let foreign = other
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
         let called = std::cell::Cell::new(false);
-        for forbidden in [&member, &foreign] {
+        for forbidden in [&foreign] {
             assert_eq!(
                 keys.with_vld0_node(forbidden, |_, _| called.set(true))
                     .await,
@@ -1507,7 +1500,10 @@ fn node_capability_rejects_member_scope_other_community_and_stale_session_before
             Err(Error::Unauthorized)
         );
         assert!(!called.get());
-        let restored = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let restored = keys
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
         assert_eq!(restored.certificate().key, node.certificate().key);
         keys.with_vld0_node(&restored, |_, _| called.set(true))
             .await
@@ -1528,9 +1524,12 @@ fn node_capability_rechecks_actual_rotation_and_revocation_before_callback() {
         create(&mut owner, &guard, &prf(1), &binding("a")).await;
         let grant = pair(&mut owner, &mut removed, &guard, &prf(2)).await;
         let previous = owner.lineage().await.unwrap();
-        let owner_handle = owner.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+        let owner_handle = owner
+            .key(wire_purpose(Scope::Device, "tor.node"))
+            .await
+            .unwrap();
         let removed_handle = removed
-            .key(purpose(Scope::Device, "tor.node"))
+            .key(wire_purpose(Scope::Device, "tor.node"))
             .await
             .unwrap();
         let called = std::cell::Cell::new(false);
@@ -1598,7 +1597,10 @@ fn node_capability_fails_closed_on_store_loss_and_clock_regression_before_callba
             let guard = Guard::default();
             let mut keys = machine(&store, &time, &guard, 157);
             create(&mut keys, &guard, &prf(1), &binding("a")).await;
-            let handle = keys.key(purpose(Scope::Device, "tor.node")).await.unwrap();
+            let handle = keys
+                .key(wire_purpose(Scope::Device, "tor.node"))
+                .await
+                .unwrap();
             let expected = if lose_store {
                 store.0.borrow_mut().read_failure = true;
                 Error::Unavailable

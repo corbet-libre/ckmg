@@ -159,7 +159,7 @@ pub fn device_public_key(prf: &PrfOutput, community: &str) -> Result<crate::Publ
     Ok(crate::vld0::public_key(&device_seed(prf, community)?))
 }
 
-/// The device key's session signature (`DevicePurpose::DeviceSession`, its fixed tag
+/// The device key's session signature (`DeviceFormat::DeviceSession`, its fixed tag
 /// prepended) straight from the unlocked passkey session. A device-key member restarted after
 /// activation opens its community sessions with it BEFORE its Keys are live: the lease that
 /// opens them needs a session. Same key and tag rule as `UnenrolledCreation::sign_device`;
@@ -169,37 +169,48 @@ pub fn sign_device_session(
     community: &str,
     payload: &[u8],
 ) -> Result<[u8; 64], Error> {
-    sign_device_opened(prf, community, crate::DevicePurpose::DeviceSession, payload)
+    crate::format::sign_payload(
+        &device_seed(prf, community)?,
+        crate::DeviceFormat::DeviceSession,
+        crate::SigningClass::Opening,
+        Some(community),
+        payload,
+    )
 }
 
-/// The same opening signer for the closed post-activation subset `{DeviceSession,
-/// SaltDerivation}`: a device-key member restarted during its first publication rebuilds its
-/// genesis stamp salt (the signature is only ever hashed, Ed25519 is deterministic, so the
-/// salt is the one its stamp covers). `WalletBirthDevice` and `WalletBirthPassport` are signed here too (a registration
-/// restarted after activation binds its wallet device from the unlocked session), but only for
-/// the wallet community. `DeviceJoin` stays pre-activation only (the enrollment signs it) and is
-/// refused here.
-pub fn sign_device_opened(
+/// The wallet device key's birth signature (`DeviceFormat::WalletBirthDevice` or
+/// `WalletBirthPassport`, the tag prepended) from the unlocked wallet opening: a registration
+/// restarted after activation binds its wallet device from the unlocked session. Opening class,
+/// and ckmg refuses any scope but the wallet's; every other format is refused here.
+pub fn sign_device_birth(
     prf: &PrfOutput,
     community: &str,
-    purpose: crate::DevicePurpose,
+    format: crate::DeviceFormat,
     payload: &[u8],
 ) -> Result<[u8; 64], Error> {
-    if !purpose.allowed_in(community) {
+    if !matches!(
+        format,
+        crate::DeviceFormat::WalletBirthDevice | crate::DeviceFormat::WalletBirthPassport
+    ) {
         return Err(Error::Unauthorized);
     }
-    match purpose {
-        crate::DevicePurpose::DeviceSession
-        | crate::DevicePurpose::SaltDerivation
-        | crate::DevicePurpose::WalletBirthDevice
-        | crate::DevicePurpose::WalletBirthPassport => {
-            purpose.sign(&device_seed(prf, community)?, payload)
-        }
-        crate::DevicePurpose::DeviceJoin => Err(Error::Unauthorized),
-    }
+    crate::format::sign_payload(
+        &device_seed(prf, community)?,
+        format,
+        crate::SigningClass::Opening,
+        Some(community),
+        payload,
+    )
 }
 
-/// The device key's join signature (`DevicePurpose::DeviceJoin`) from the opening, ONLY for a
+/// The opening's stamp salt for a device-key member restarted during its first publication:
+/// it rebuilds its genesis stamp salt bit-exact (`SHA-256(Ed25519(device, salt tag ||
+/// payload))`, deterministic). The signature never leaves ckmg; no signer accepts the tag.
+pub fn device_salt(prf: &PrfOutput, community: &str, payload: &[u8]) -> Result<[u8; 32], Error> {
+    crate::format::device_salt(&device_seed(prf, community)?, payload)
+}
+
+/// The device key's join signature (`DeviceFormat::DeviceJoin`) from the opening, ONLY for a
 /// device restoring a member whose join the community already applied. Crate-private: the
 /// only way in is `InitialCheckpointProvenance::sign_device_join_restored`, whose receiver
 /// (minted only by ckmg from the PRF-authenticated original initial ACK) is the capability.
@@ -210,7 +221,13 @@ pub(crate) fn sign_device_join_restored(
     community: &str,
     payload: &[u8],
 ) -> Result<[u8; 64], Error> {
-    crate::DevicePurpose::DeviceJoin.sign(&device_seed(prf, community)?, payload)
+    crate::format::sign_payload(
+        &device_seed(prf, community)?,
+        crate::DeviceFormat::DeviceJoin,
+        crate::SigningClass::Provenance,
+        Some(community),
+        payload,
+    )
 }
 
 #[cfg(feature = "profile-envelope")]

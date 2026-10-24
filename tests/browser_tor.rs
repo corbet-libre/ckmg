@@ -98,7 +98,7 @@ async fn exact_device_purpose_and_namespace_bind_the_original_ed25519_key() {
     let (_, _, _, mut keys) = setup(81).await;
     let fixture = fixture();
     for invalid in [
-        purpose(Scope::Member, "tor.onion"),
+        wire_purpose(Scope::Member, "tor.onion"),
         purpose(Scope::Device, "profile"),
     ] {
         let handle = keys.key(invalid).await.unwrap();
@@ -109,7 +109,10 @@ async fn exact_device_purpose_and_namespace_bind_the_original_ed25519_key() {
         ));
     }
     assert_eq!(count(&fixture, "calls"), 0);
-    let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+    let handle = keys
+        .key(wire_purpose(Scope::Device, "tor.onion"))
+        .await
+        .unwrap();
     let verify = verifier(handle.certificate().key);
     let initializer = keys
         .browser_tor_initializer(&handle, ctrn::Scope(NAMESPACE))
@@ -148,7 +151,7 @@ async fn lock_drop_and_observed_authority_loss_stop_bound_nodes_and_callbacks() 
         let handle = keys
             .as_mut()
             .unwrap()
-            .key(purpose(Scope::Device, "tor.onion"))
+            .key(wire_purpose(Scope::Device, "tor.onion"))
             .await
             .unwrap();
         let verify = verifier(handle.certificate().key);
@@ -202,7 +205,10 @@ async fn lock_drop_and_observed_authority_loss_stop_bound_nodes_and_callbacks() 
 async fn closed_unused_initializer_cannot_bind_or_call_the_factory() {
     for drop_keys in [false, true] {
         let (_, _, _, mut keys) = setup(88).await;
-        let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+        let handle = keys
+            .key(wire_purpose(Scope::Device, "tor.onion"))
+            .await
+            .unwrap();
         let verify = verifier(handle.certificate().key);
         let fixture = fixture();
         let initializer = keys
@@ -226,7 +232,10 @@ async fn closed_unused_initializer_cannot_bind_or_call_the_factory() {
 #[wasm_bindgen_test]
 async fn eight_custodies_are_bounded_and_initializer_or_node_drop_frees_capacity() {
     let (_, _, _, mut keys) = setup(89).await;
-    let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+    let handle = keys
+        .key(wire_purpose(Scope::Device, "tor.onion"))
+        .await
+        .unwrap();
     let mut held = Vec::new();
     for _ in 0..8 {
         held.push(
@@ -269,7 +278,10 @@ async fn eight_custodies_are_bounded_and_initializer_or_node_drop_frees_capacity
 #[wasm_bindgen_test]
 async fn lock_during_start_refuses_retained_identity_and_disposes_late_backend_once() {
     let (_, _, _, mut keys) = setup(90).await;
-    let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+    let handle = keys
+        .key(wire_purpose(Scope::Device, "tor.onion"))
+        .await
+        .unwrap();
     let verify = verifier(handle.certificate().key);
     let fixture = fixture();
     hold(&fixture);

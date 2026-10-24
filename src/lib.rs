@@ -14,6 +14,8 @@
 //! Cryptographic custody is not proof of community membership or current eligibility.
 
 mod error;
+mod format;
+pub use format::{DeviceFormat, SigningClass};
 mod intent;
 pub use intent::{AdmittedCommand, IntentAdmission, IntentGuard, IntentVerifier, intent_channel};
 #[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
@@ -52,15 +54,16 @@ mod vld0;
 pub use cnvl as envelope;
 pub use error::Error;
 
+#[cfg(feature = "profile-envelope")]
+pub use keys::ProfileSigner;
 pub use keys::{
     AccountDeviceAuthorization, AccountDevicePlan, Change, CheckpointBootstrap,
     CheckpointInspection, CheckpointInspector, CheckpointRecordCustody, CompletionIntent,
-    DeviceAttestation, DeviceEd25519Signer, DeviceInfo, DevicePurpose, Ed25519Signer,
-    EnrollmentSeed, EphemeralTransport, InitialCheckpointProvenance, InitialLineageReader,
-    KeyHandle, Keys, LineageReadCapability, LineageReadCustody, OperationId, PendingCompletion,
-    PendingCreation, ProvisionalLineage, Receipt, RestoreRoot, State, TransportSession,
-    UnenrolledCreation, Vld0Signer, inspect_checkpoint, wallet_birth_device_payload,
-    wallet_birth_passport_payload,
+    DeviceAttestation, DeviceInfo, Ed25519Signer, EnrollmentSeed, EphemeralTransport,
+    InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys, LineageReadCapability,
+    LineageReadCustody, OperationId, PendingCompletion, PendingCreation, ProvisionalLineage,
+    Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation, Vld0Signer,
+    inspect_checkpoint, wallet_birth_device_payload, wallet_birth_passport_payload,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,

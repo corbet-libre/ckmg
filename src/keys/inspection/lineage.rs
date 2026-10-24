@@ -229,7 +229,7 @@ fn lineage_reader(root: &Secret, lineage: &Lineage) -> Result<LineageReadCustody
 }
 
 pub(in crate::keys) fn lineage_secret(root: &Secret, lineage: &Lineage) -> Result<Secret, Error> {
-    let purpose = Purpose::new(Scope::Member, "vault.lineage", 0)?;
+    let purpose = Purpose::reserved(Scope::Member, "vault.lineage", 0)?;
     let context = encode(
         b"ckmg.purpose.context.v1\0",
         &(

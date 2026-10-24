@@ -17,36 +17,49 @@ pub(in crate::keys) struct StoredInitial {
 /// Public original creation facts authenticated by the normal PRF checkpoint.
 /// This is not current authority. Only the original same-key owner, actual
 /// selected lineage and later exact inner Store join may authorize recovery.
-pub struct InitialCheckpointProvenance(StoredInitial);
+pub struct InitialCheckpointProvenance {
+    initial: StoredInitial,
+    /// The acknowledged checkpoint's location and device. Present only when minted from an
+    /// acknowledged checkpoint (`CheckpointInspector::initial_acknowledgment`); the
+    /// creation-time facts (`PendingCompletion::initial_acknowledgment`) sign nothing.
+    holder: Option<(Locator, PublicKey)>,
+}
 impl InitialCheckpointProvenance {
     /// The restored device's `DeviceJoin` signature for the stamp-less re-confirmation of the
-    /// join the community already applied (key from `prf` and `community`, enrollment tag).
-    /// This authenticated original ACK is the capability; no other public route signs a join
-    /// outside the enrollment (`passkey::sign_device_opened` refuses it).
+    /// join the community already applied (key from `prf` and `community`, join tag). This
+    /// authenticated original ACK is the capability, bound to its own checkpoint: `prf` and
+    /// `community` must locate exactly that checkpoint and derive exactly its device. No
+    /// other public route signs a join outside the enrollment.
     pub fn sign_device_join_restored(
         &self,
         prf: &crate::passkey::PrfOutput,
         community: &str,
         payload: &[u8],
     ) -> Result<[u8; 64], Error> {
+        let (location, device) = self.holder.as_ref().ok_or(Error::Unauthorized)?;
+        if crate::passkey::vault_location(prf, community)? != *location
+            || crate::passkey::device_public_key(prf, community)? != *device
+        {
+            return Err(Error::Unauthorized);
+        }
         crate::passkey::sign_device_join_restored(prf, community, payload)
     }
     /// Original enrollment commitment, recomputed from retained private root.
     pub fn seed(&self) -> [u8; 32] {
-        self.0.seed
+        self.initial.seed
     }
     /// Original immutable publication commitment; its deadline is not renewed.
     pub fn publication(&self) -> [u8; 32] {
-        self.0.publication
+        self.initial.publication
     }
     /// Original exact Created operation.
     pub fn operation(&self) -> OperationId {
-        self.0.operation
+        self.initial.operation
     }
     /// Canonical public facts for the same original Store acknowledgment batch.
     /// These bytes alone are never an authenticated checkpoint or a capability.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        encode(b"ckmg.initial-acknowledgment.v1\0", &self.0)
+        encode(b"ckmg.initial-acknowledgment.v1\0", &self.initial)
     }
 }
 redacted!(InitialCheckpointProvenance);
@@ -117,25 +130,28 @@ impl PendingCompletion {
     pub fn initial_acknowledgment(&self) -> Result<InitialCheckpointProvenance, Error> {
         self.checked_at.ok_or(Error::Unauthorized)?;
         let (lineage, _) = self.source.receipt.attested_lineage()?;
-        Ok(InitialCheckpointProvenance(StoredInitial {
-            version: 1,
-            operation: self.source.receipt.operation,
-            seed: super::super::enrollment::commitment(
-                &lineage.binding,
-                &self.source.root,
-                self.source.receipt.operation,
-            )?,
-            publication: self.source.receipt.initial_publication_commitment(
-                &self.intent.nonce,
-                &self.intent.packed_evidence,
-                self.intent.prepared_at,
-                self.intent.expires,
-            )?,
-            nonce: self.intent.nonce,
-            evidence_digest: *blake3::hash(&self.intent.packed_evidence).as_bytes(),
-            prepared_at: self.intent.prepared_at,
-            expires: self.intent.expires,
-        }))
+        Ok(InitialCheckpointProvenance {
+            holder: None,
+            initial: StoredInitial {
+                version: 1,
+                operation: self.source.receipt.operation,
+                seed: super::super::enrollment::commitment(
+                    &lineage.binding,
+                    &self.source.root,
+                    self.source.receipt.operation,
+                )?,
+                publication: self.source.receipt.initial_publication_commitment(
+                    &self.intent.nonce,
+                    &self.intent.packed_evidence,
+                    self.intent.prepared_at,
+                    self.intent.expires,
+                )?,
+                nonce: self.intent.nonce,
+                evidence_digest: *blake3::hash(&self.intent.packed_evidence).as_bytes(),
+                prepared_at: self.intent.prepared_at,
+                expires: self.intent.expires,
+            },
+        })
     }
 
     pub(in crate::keys) fn bind_acknowledgment(
@@ -164,7 +180,7 @@ impl PendingCompletion {
             return Err(Error::Unauthorized);
         }
         self.checked_at = Some(now);
-        Ok(self.initial_acknowledgment()?.0)
+        Ok(self.initial_acknowledgment()?.initial)
     }
 
     pub(in crate::keys) fn acknowledgment_guard(&mut self) -> AcknowledgmentGuard<'_> {
@@ -218,6 +234,9 @@ impl CheckpointInspector {
         let (metadata, material) = self.decode(sealed)?;
         let initial = metadata.initial.as_ref().ok_or(Error::Unauthorized)?;
         initial.verify_receipt(&metadata, &material, receipt, packed_evidence)?;
-        Ok(InitialCheckpointProvenance(initial.clone()))
+        Ok(InitialCheckpointProvenance {
+            initial: initial.clone(),
+            holder: Some((self.location, vld0::public_key(&material.device))),
+        })
     }
 }

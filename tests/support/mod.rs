@@ -21,6 +21,18 @@ pub fn info() -> DeviceInfo {
 pub fn purpose(scope: Scope, label: &str) -> Purpose {
     Purpose::new(scope, label, 0).unwrap()
 }
+/// A purpose as it arrives on the wire (a certificate's purpose): reserved labels decode,
+/// and `Keys` alone decides whether it derives them.
+pub fn wire_purpose(scope: Scope, label: &str) -> Purpose {
+    let scope = match scope {
+        Scope::Member => "member",
+        Scope::Device => "device",
+    };
+    serde_json::from_str(&format!(
+        r#"{{"scope":"{scope}","label":"{label}","version":0}}"#
+    ))
+    .unwrap()
+}
 
 #[derive(Clone, Default)]
 pub struct Memory(pub Rc<RefCell<MemoryData>>);

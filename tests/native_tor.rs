@@ -34,7 +34,7 @@ async fn only_the_fresh_device_onion_purpose_can_construct_the_actual_engine() {
     let mut keys = machine(&store, &time, &guard, 73);
     create(&mut keys, &guard, &prf(1), &binding("garden")).await;
     for other in [
-        purpose(Scope::Member, "tor.onion"),
+        wire_purpose(Scope::Member, "tor.onion"),
         purpose(Scope::Device, "profile"),
     ] {
         let handle = keys.key(other).await.unwrap();
@@ -44,7 +44,10 @@ async fn only_the_fresh_device_onion_purpose_can_construct_the_actual_engine() {
             Err(Error::InvalidPurpose)
         ));
     }
-    let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+    let handle = keys
+        .key(wire_purpose(Scope::Device, "tor.onion"))
+        .await
+        .unwrap();
     let initializer = keys
         .native_tor_initializer(&handle, ctrn::Scope([4; 32]))
         .await
@@ -72,7 +75,10 @@ async fn locked_or_dropped_keys_invalidate_an_initializer_already_transferred() 
         let guard = Guard::default();
         let mut keys = machine(&store, &time, &guard, 74);
         create(&mut keys, &guard, &prf(1), &binding("garden")).await;
-        let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+        let handle = keys
+            .key(wire_purpose(Scope::Device, "tor.onion"))
+            .await
+            .unwrap();
         let initializer = keys
             .native_tor_initializer(&handle, ctrn::Scope([4; 32]))
             .await
@@ -98,7 +104,10 @@ async fn replaced_checkpoint_revoked_device_and_regressed_clock_refuse_custody()
         let guard = Guard::default();
         let mut keys = machine(&store, &time, &guard, 75);
         create(&mut keys, &guard, &prf(1), &binding("garden")).await;
-        let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+        let handle = keys
+            .key(wire_purpose(Scope::Device, "tor.onion"))
+            .await
+            .unwrap();
         match case {
             0 => store.0.borrow_mut().records.clear(),
             1 => guard
@@ -159,7 +168,10 @@ async fn the_original_checkpoint_and_clock_are_rechecked_after_authority_returns
             },
         );
         keys.unlock(&prf(1), "garden").await.unwrap();
-        let handle = keys.key(purpose(Scope::Device, "tor.onion")).await.unwrap();
+        let handle = keys
+            .key(wire_purpose(Scope::Device, "tor.onion"))
+            .await
+            .unwrap();
         let pending = keys
             .native_tor_initializer(&handle, ctrn::Scope([4; 32]))
             .await

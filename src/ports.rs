@@ -111,7 +111,7 @@ pub enum NodePurpose {
 impl NodePurpose {
     /// Construct the exact device purpose with its owner-selected generation.
     pub fn purpose(self, generation: u32) -> Result<Purpose, Error> {
-        Purpose::new(Scope::Device, self.label(), generation)
+        Purpose::reserved(Scope::Device, self.label(), generation)
     }
 
     pub(crate) fn label(self) -> &'static str {
@@ -197,6 +197,9 @@ pub enum Action {
 pub struct DeviceSigning<'a> {
     /// Exact bounded owner transcript; no digest or alternative framing.
     pub transcript: &'a [u8],
+    /// The device-key format the transcript is led by (`SignDeviceEd25519`); `None` for
+    /// the root-signed account-device authorization.
+    pub format: Option<crate::DeviceFormat>,
     /// Exclusive Unix-second deadline from the trusted local admission.
     pub expires: u64,
 }

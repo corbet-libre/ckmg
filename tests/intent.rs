@@ -13,6 +13,7 @@ fn command() -> AdmittedCommand {
         target: Some(PublicKey::new(VLD0, [3; 32])),
         statement: Some([4; 32]),
         transcript: None,
+        format: None,
         expires: 1200,
     }
 }
@@ -145,13 +146,14 @@ fn stale_guard_cannot_cancel_later_admission_and_invalid_input_cannot_reserve() 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
 fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender() {
-    for case in 0..6 {
+    for case in 0..7 {
         let (mut admission, mut verifier) = intent_channel();
         let mut command = command();
         command.action = Action::SignDeviceEd25519;
         command.target = None;
         command.statement = None;
-        command.transcript = Some(b"original owner transcript".to_vec());
+        command.transcript = Some(b"cvld.device-session.v1\0original owner transcript".to_vec());
+        command.format = Some(DeviceFormat::DeviceSession);
         let _guard = admission.admit(command, 1000).unwrap();
         let binding = Binding::new("garden", "member").unwrap();
         let mut request = request(&binding);
@@ -159,7 +161,8 @@ fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender
         request.target = None;
         request.statement = None;
         request.signing = Some(DeviceSigning {
-            transcript: b"original owner transcript",
+            transcript: b"cvld.device-session.v1\0original owner transcript",
+            format: Some(DeviceFormat::DeviceSession),
             expires: 1200,
         });
         match case {
@@ -168,6 +171,7 @@ fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender
             2 => request.signing.as_mut().unwrap().expires = 1201,
             3 => request.signing = None,
             4 => request.action = Action::LendDeviceSigner,
+            5 => request.signing.as_mut().unwrap().format = Some(DeviceFormat::DeviceJoin),
             _ => request.action = Action::Use,
         }
         assert_eq!(
@@ -178,7 +182,8 @@ fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender
         );
         request.action = Action::SignDeviceEd25519;
         request.signing = Some(DeviceSigning {
-            transcript: b"original owner transcript",
+            transcript: b"cvld.device-session.v1\0original owner transcript",
+            format: Some(DeviceFormat::DeviceSession),
             expires: 1200,
         });
         assert!(
@@ -188,17 +193,23 @@ fn signing_binds_original_bytes_and_deadline_without_authorizing_a_signer_lender
         );
     }
     let (mut admission, _) = intent_channel();
-    for case in 0..5 {
+    for case in 0..8 {
         let mut command = command();
         command.action = Action::SignDeviceEd25519;
         command.target = None;
         command.statement = None;
-        command.transcript = Some(b"original owner transcript".to_vec());
+        command.transcript = Some(b"cvld.device-session.v1\0original owner transcript".to_vec());
+        command.format = Some(DeviceFormat::DeviceSession);
         match case {
             0 => command.transcript = None,
             1 => command.action = Action::Use,
             2 => command.target = Some(PublicKey::new(VLD0, [3; 32])),
             3 => command.statement = Some([1; 32]),
+            // Device signing is typed: a format is required, must lead the transcript and
+            // must be one exact admission may sign.
+            4 => command.format = None,
+            5 => command.format = Some(DeviceFormat::AccountRequest),
+            6 => command.format = Some(DeviceFormat::DeviceJoin),
             _ => command.transcript = Some(vec![0; MAX_MESSAGE_BYTES + 1]),
         }
         assert!(matches!(

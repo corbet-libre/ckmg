@@ -30,9 +30,9 @@ enum CurrentCheck<'a> {
     AccountSigning,
 }
 pub use account_device::{AccountDeviceAuthorization, AccountDevicePlan};
+pub(crate) use enrollment::WALLET_COMMUNITY;
 pub use enrollment::{
-    DevicePurpose, EnrollmentSeed, UnenrolledCreation, wallet_birth_device_payload,
-    wallet_birth_passport_payload,
+    EnrollmentSeed, UnenrolledCreation, wallet_birth_device_payload, wallet_birth_passport_payload,
 };
 pub use ephemeral::EphemeralTransport;
 pub use inspection::{
@@ -272,27 +272,49 @@ impl Ed25519Signer<'_> {
     }
 }
 
-/// The freshly authorized lineage device, distinct from a derived purpose signer.
-/// Only `Keys::with_device_ed25519_signer` can lend this capability. It cannot
-/// escape that call or be constructed from an unsigned public key.
-pub struct DeviceEd25519Signer<'key>(Ed25519Signer<'key>);
+/// The lineage device's Profile signer, lent only by `Keys::with_profile_custody`. It signs
+/// only the Profile formats (`SigningClass::Profile`: the cpfl publication and the cgrd
+/// bundle), never another device format or a raw transcript. Its HPKE key is the certified
+/// Device-scope Profile purpose key, never the device scalar (which stays root transport).
+/// It cannot escape that call or be constructed from an unsigned public key.
+#[cfg(feature = "profile-envelope")]
+pub struct ProfileSigner<'key> {
+    device: &'key Secret,
+    public_key: [u8; 32],
+    hpke: [u8; 32],
+    certificate: KeyCertificate,
+}
 
-impl DeviceEd25519Signer<'_> {
+#[cfg(feature = "profile-envelope")]
+impl ProfileSigner<'_> {
     /// Exact public key of this authorized lineage device.
     pub fn public_key(&self) -> &[u8; 32] {
-        self.0.public_key()
+        &self.public_key
     }
 
-    /// X25519 public key of this same authorized device, using the maintained
-    /// VLD0 conversion already used by pairing. Profile signs it explicitly;
+    /// X25519 public key of this device's Profile purpose key. Profile signs it explicitly;
     /// peers must verify that signed field through Guard before HPKE release.
-    pub fn hpke_public_key(&self) -> Result<[u8; 32], Error> {
-        vld0::x25519_public(&PublicKey::new(VLD0, *self.public_key()))
+    pub fn hpke_public_key(&self) -> [u8; 32] {
+        self.hpke
     }
 
-    /// Sign a bounded owner transcript with the actual device key.
+    /// The device-signed certificate of the Profile purpose key whose X25519 form is
+    /// [`Self::hpke_public_key`].
+    pub fn hpke_certificate(&self) -> &KeyCertificate {
+        &self.certificate
+    }
+
+    /// Sign a Profile-format transcript (led by the cpfl publication or cgrd bundle tag)
+    /// with the actual device key. Every other message is refused.
     pub fn sign(&self, transcript: &[u8]) -> Result<[u8; 64], Error> {
-        self.0.sign(transcript)
+        let format = crate::DeviceFormat::of(transcript).ok_or(Error::Unauthorized)?;
+        crate::format::sign(
+            self.device,
+            format,
+            crate::SigningClass::Profile,
+            None,
+            transcript,
+        )
     }
 }
 
@@ -1259,41 +1281,15 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         Ok(vld0::public_key(&self.loaded()?.material.device))
     }
 
-    /// Sign exactly the borrowed original owner transcript after distinct,
-    /// one-use intent and current G3 authorization. No generic signer escapes.
-    /// The trusted composer supplies the original exclusive grant deadline and
-    /// retains its IntentGuard through the downstream operation, including waits.
-    pub async fn sign_device_ed25519(
-        &mut self,
-        transcript: &[u8],
-        expires: u64,
-    ) -> Result<[u8; 64], Error> {
-        self.writable()?;
-        self.authorize_with_signing(
-            Action::SignDeviceEd25519,
-            None,
-            None,
-            &[],
-            Some(crate::DeviceSigning {
-                transcript,
-                expires,
-            }),
-        )
-        .await?;
-        // Authorization can suspend; refuse a replaced/locked checkpoint and
-        // expired or regressed clock before touching the device signer. Exact
-        // local intent has already been consumed even when these checks refuse.
+    /// This device's stamp salt over `payload`: `SHA-256(Ed25519(device, salt tag ||
+    /// payload))`, byte-identical to the opening's and the candidate's. Only the hash leaves;
+    /// the signature over the salt message never does, and no signer accepts the salt tag.
+    /// Ordinary `Use` (the salt is a rebuildable stamp nonce, never a credential).
+    pub async fn device_salt(&mut self, payload: &[u8]) -> Result<[u8; 32], Error> {
+        self.authorize(Action::Use, None, None, &[]).await?;
         self.refresh().await?;
-        if self.now()? >= expires {
-            self.fail_closed(State::Locked);
-            return Err(Error::Expired);
-        }
-        let secret = &self.loaded()?.material.device;
-        Ed25519Signer {
-            secret,
-            public_key: *vld0::public_key(secret).value(),
-        }
-        .sign(transcript)
+        self.now()?;
+        crate::format::device_salt(&self.loaded()?.material.device, payload)
     }
 
     /// Authorized local access to private device metadata; never included in network outputs.
@@ -1611,8 +1607,13 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Obtain a purpose capability and device-signed public certificate. The handle
     /// is invalid after lock, restore, root rotation, or current-device revocation.
     pub async fn key(&mut self, purpose: Purpose) -> Result<KeyHandle, Error> {
-        purpose.validate()?;
-        if let Some(node) = NodePurpose::of(&purpose) {
+        let node = NodePurpose::of(&purpose);
+        if node.is_none() {
+            // Reserved namespaces (`vault.`, `ckmg.`) are internal derivations only.
+            purpose.validate()?;
+        }
+        purpose.validate_shape()?;
+        if let Some(node) = node {
             // A durable pending receipt must be publishable before member
             // authority exists. This does not permit a prepared/uncertain write.
             self.authorize(Action::UseTransport(node), None, None, &[])
@@ -1661,6 +1662,11 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     }
 
     async fn check_handle(&mut self, handle: &KeyHandle) -> Result<(), Error> {
+        // Generic purpose APIs never act for a reserved purpose: `tor.*` handles work only
+        // through the node and Tor APIs (`check_transport_handle`), `vault.*`/`ckmg.*` never.
+        if handle.certificate.purpose.is_reserved() {
+            return Err(Error::InvalidPurpose);
+        }
         self.writable()?;
         self.authorize(Action::Use, None, None, &[]).await?;
         self.validate_handle(handle)
@@ -1872,34 +1878,6 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         ))
     }
 
-    /// Lend the actual lineage device signer for upstream plain-Ed25519 formats
-    /// such as profile publication. Its public key is a member of `Lineage.devices`,
-    /// unlike a purpose key. Current server/device authority is checked first.
-    /// This requests LendDeviceSigner, never metadata Use or exact transcript
-    /// admission. The authority must explicitly allow this broader owner operation.
-    /// This capability is never a replacement for the server's G3 authorization.
-    ///
-    /// ```compile_fail
-    /// # use ckmg::*;
-    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
-    /// #     keys: &mut Keys<S, C, R, A>) {
-    /// let retained = keys.with_device_ed25519_signer(|signer| signer).await;
-    /// # }
-    /// ```
-    pub async fn with_device_ed25519_signer<T>(
-        &mut self,
-        use_signer: impl for<'key> FnOnce(DeviceEd25519Signer<'key>) -> T,
-    ) -> Result<T, Error> {
-        self.writable()?;
-        self.authorize(Action::LendDeviceSigner, None, None, &[])
-            .await?;
-        let secret = &self.loaded()?.material.device;
-        Ok(use_signer(DeviceEd25519Signer(Ed25519Signer {
-            secret,
-            public_key: *vld0::public_key(secret).value(),
-        })))
-    }
-
     /// Export this member's OWN lineage-record read capability so a peer can read
     /// it (the Veilid record-key model). Requires fresh live-device `Use`
     /// authorization with the current lineage. It covers only this scope's own
@@ -1952,7 +1930,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     #[cfg(feature = "profile-envelope")]
     pub async fn with_profile_custody<T>(
         &mut self,
-        consume: impl for<'key> FnOnce(DeviceEd25519Signer<'key>, cnvl::Custodian<'key>) -> T,
+        consume: impl for<'key> FnOnce(ProfileSigner<'key>, cnvl::Custodian<'key>) -> T,
     ) -> Result<T, Error> {
         self.writable()?;
         self.authorize(Action::LendProfileCustody, None, None, &[])
@@ -1967,8 +1945,23 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .as_ref()
             .ok_or(Error::MissingCheckpoint)?;
         let wrapping = passkey::profile_storage_key(common, binding.community())?;
-        let hpke = vld0::x25519_secret(&current.material.device);
-        let public = *vld0::public_key(&current.material.device).value();
+        // The certified Device-scope Profile purpose key, never the device scalar: the
+        // device's X25519 key opens its root envelopes and stays root transport only.
+        let purpose = Purpose::reserved(Scope::Device, PROFILE_HPKE, 0)?;
+        let seed = purpose_secret(current, &purpose, false)?;
+        let hpke = vld0::x25519_secret(&seed);
+        let hpke_public = vld0::x25519_public(&vld0::public_key(&seed))?;
+        let device = vld0::public_key(&current.material.device);
+        let mut certificate = KeyCertificate {
+            binding: binding.clone(),
+            epoch: current.metadata.lineage.epoch,
+            device,
+            purpose,
+            key: vld0::public_key(&seed),
+            signature: empty_signature(),
+        };
+        certificate.signature = vld0::sign(&current.material.device, &certificate.signed_bytes()?)?;
+        let public = *device.value();
         let custody = cnvl::Custodian::from_keys(
             &hpke,
             &wrapping,
@@ -1977,10 +1970,12 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             public,
         )
         .map_err(|_| Error::Crypto)?;
-        let signer = DeviceEd25519Signer(Ed25519Signer {
-            secret: &current.material.device,
+        let signer = ProfileSigner {
+            device: &current.material.device,
             public_key: public,
-        });
+            hpke: hpke_public,
+            certificate,
+        };
         Ok(consume(signer, custody))
     }
 
@@ -2298,6 +2293,33 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         Ok(crate::native_record::owner(schema, &owner, &read))
     }
 
+    /// Transfer the owner custody of the Vault's own compound checkpoint record (`None`: the
+    /// manifest; `Some(i)`, `i < 10`: chunk `i`) into the maintained native record engine.
+    /// Its purposes are reserved (`vault.checkpoint*`), so no generic purpose API derives,
+    /// signs or decrypts with them; this initializer has no key getter. Returns the binding
+    /// the record belongs to.
+    #[cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
+    pub async fn native_checkpoint_record_initializer(
+        &mut self,
+        child: Option<usize>,
+        schema: crate::NativeRecordSchema,
+    ) -> Result<(Binding, crate::NativeRecordInitializer), Error> {
+        let purpose = checkpoint_record_purpose(child)?;
+        self.writable()?;
+        self.authorize(Action::Use, None, None, &[]).await?;
+        let current = self.loaded()?;
+        let owner = purpose_secret(current, &purpose, false)?;
+        let cipher = purpose_secret(current, &purpose, true)?;
+        let read = Zeroizing::new(blake3::derive_key(
+            "ckmg 2026-10 VLD0 record encryption v1",
+            &*cipher,
+        ));
+        Ok((
+            current.metadata.lineage.binding.clone(),
+            crate::native_record::owner(schema, &owner, &read),
+        ))
+    }
+
     /// Transfer only the authorized device onion purpose into the maintained
     /// native Tor engine. No root, device seed or general-purpose key getter is
     /// exposed. The scope is selected by the trusted Vault composer, never JSON.
@@ -2362,6 +2384,20 @@ impl Open {
             State::Authorized
         }
     }
+}
+
+/// The Device-scope Profile HPKE purpose (reserved: generic `key` never derives it).
+#[cfg(feature = "profile-envelope")]
+const PROFILE_HPKE: &str = "ckmg.profile.hpke";
+
+/// The reserved purpose of the Vault's compound checkpoint manifest (None) or chunk.
+pub(crate) fn checkpoint_record_purpose(child: Option<usize>) -> Result<Purpose, Error> {
+    let label = match child {
+        None => "vault.checkpoint".to_owned(),
+        Some(index) if index < 10 => format!("vault.checkpoint.chunk.{index}"),
+        Some(_) => return Err(Error::Limit),
+    };
+    Purpose::reserved(Scope::Member, &label, 0)
 }
 
 fn empty_signature() -> Signature {
@@ -2508,7 +2544,7 @@ fn purpose_secret_at(
     epoch: u64,
     root: &Secret,
 ) -> Result<Secret, Error> {
-    purpose.validate()?;
+    purpose.validate_shape()?;
     let parent = match purpose.scope() {
         Scope::Member => root,
         Scope::Device => &current.material.device,

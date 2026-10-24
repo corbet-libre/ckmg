@@ -49,6 +49,9 @@ impl Authority for SigningAuthority {
         }
         Ok(())
     }
+    fn check_device_signing_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Ok(self.time.0.get())
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
@@ -79,7 +82,13 @@ fn exact_signing_rechecks_after_await_and_never_reuses_consumed_intent() {
                 },
             );
             keys.unlock(&prf(1), "a").await.unwrap();
-            let transcript = b"original prepared owner bytes";
+            let transcript = &[
+                DeviceFormat::DeviceSession.tag(),
+                b"original prepared owner bytes",
+            ]
+            .concat()[..];
+            let different =
+                &[DeviceFormat::DeviceSession.tag(), b"different owner bytes"].concat()[..];
             let guard = admission
                 .admit(
                     AdmittedCommand {
@@ -92,6 +101,7 @@ fn exact_signing_rechecks_after_await_and_never_reuses_consumed_intent() {
                         target: None,
                         statement: None,
                         transcript: Some(transcript.to_vec()),
+                        format: Some(DeviceFormat::DeviceSession),
                         expires: 1200,
                     },
                     1000,
@@ -102,23 +112,22 @@ fn exact_signing_rechecks_after_await_and_never_reuses_consumed_intent() {
             if case == 7 {
                 // Drop a suspended authorization after it consumed exact intent.
                 assert!(
-                    keys.sign_device_ed25519(transcript, 1200)
+                    keys.sign_device_ed25519_current(DeviceFormat::DeviceSession, transcript, 1200)
                         .now_or_never()
                         .is_none()
                 );
                 after.set(0);
+                // The cancelled attempt failed closed: Keys are locked, nothing is signed.
                 assert_eq!(
-                    keys.sign_device_ed25519(transcript, 1200).await,
-                    Err(Error::Unauthorized)
+                    keys.sign_device_ed25519_current(DeviceFormat::DeviceSession, transcript, 1200)
+                        .await,
+                    Err(Error::Locked)
                 );
             } else {
                 let result = keys
-                    .sign_device_ed25519(
-                        if case == 1 {
-                            b"different owner bytes"
-                        } else {
-                            transcript
-                        },
+                    .sign_device_ed25519_current(
+                        DeviceFormat::DeviceSession,
+                        if case == 1 { different } else { transcript },
                         if case == 2 { 1199 } else { 1200 },
                     )
                     .await;
@@ -126,9 +135,14 @@ fn exact_signing_rechecks_after_await_and_never_reuses_consumed_intent() {
                     0 => {
                         let signature = result.unwrap();
                         verify_ed25519(device.value(), transcript, &signature).unwrap();
-                        assert!(verify_ed25519(device.value(), b"different", &signature).is_err());
+                        assert!(verify_ed25519(device.value(), different, &signature).is_err());
                         assert_eq!(
-                            keys.sign_device_ed25519(transcript, 1200).await,
+                            keys.sign_device_ed25519_current(
+                                DeviceFormat::DeviceSession,
+                                transcript,
+                                1200
+                            )
+                            .await,
                             Err(Error::Unauthorized)
                         );
                     }
@@ -141,39 +155,5 @@ fn exact_signing_rechecks_after_await_and_never_reuses_consumed_intent() {
             }
             drop(guard);
         }
-    });
-}
-
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-fn metadata_authority_does_not_lend_a_generic_device_signer() {
-    block_on(async {
-        let store = Memory::default();
-        let time = Time::default();
-        let current = Guard::default();
-        let mut initial = machine(&store, &time, &current, 100);
-        create(&mut initial, &current, &prf(1), &binding("a")).await;
-        drop(initial);
-        let (_, intent) = intent_channel();
-        let mut keys = Keys::new(
-            store.clone(),
-            time.clone(),
-            Random::new(101),
-            SigningAuthority {
-                current,
-                intent,
-                store,
-                time,
-                after: Rc::new(Cell::new(0)),
-            },
-        );
-        keys.unlock(&prf(1), "a").await.unwrap();
-        keys.device_public_key().await.unwrap();
-        let called = Cell::new(false);
-        assert_eq!(
-            keys.with_device_ed25519_signer(|_| called.set(true)).await,
-            Err(Error::Unauthorized)
-        );
-        assert!(!called.get());
     });
 }

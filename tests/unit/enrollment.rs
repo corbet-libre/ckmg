@@ -1,6 +1,7 @@
 //! Original codec, private random candidate and atomic standalone checkpoint.
 //! Strict synthetic activation inputs prove no HTTPS, compound CWST or G3 grant.
 use super::*;
+use crate::{DeviceFormat, SigningClass};
 use futures::{FutureExt, executor::block_on};
 use std::{
     cell::{Cell, RefCell},
@@ -527,58 +528,67 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
     let (prf, candidate) = candidate(&mut time);
     let device = *passkey::device_public_key(&prf, COMMUNITY).unwrap().value();
     let payload = b"community, challenge and key";
-    let purposes = [
-        DevicePurpose::DeviceJoin,
-        DevicePurpose::DeviceSession,
-        DevicePurpose::SaltDerivation,
+    let signers = [
+        crate::DeviceFormat::DeviceJoin,
+        crate::DeviceFormat::DeviceSession,
     ];
-    let tags: Vec<&[u8]> = purposes.iter().map(|purpose| purpose.tag()).collect();
-    assert_eq!(
-        tags,
-        [
-            &b"cvld.device-join.v1\0"[..],
-            b"cvld.device-session.v1\0",
-            b"cmsg.device-join.salt.v1\0"
-        ]
-    );
-    for purpose in purposes {
-        let signature = candidate.sign_device(purpose, payload).unwrap();
+    for format in crate::DeviceFormat::ALL {
+        let result = candidate.sign_device(format, payload);
+        if !signers.contains(&format) {
+            // The enrollment signs only the join and the session.
+            assert_eq!(result, Err(Error::Unauthorized));
+            continue;
+        }
+        let signature = result.unwrap();
         // Valid under its own tag only: never over the bare payload ...
-        let signed = [purpose.tag(), &payload[..]].concat();
+        let signed = [format.tag(), &payload[..]].concat();
         vld0::verify_ed25519(&device, &signed, &signature).unwrap();
         assert!(vld0::verify_ed25519(&device, payload, &signature).is_err());
-        // ... and never as another purpose.
-        for other in purposes.into_iter().filter(|other| *other != purpose) {
+        // ... and never as another format or as the salt message.
+        for other in crate::DeviceFormat::ALL
+            .into_iter()
+            .filter(|other| *other != format)
+        {
             let as_other = [other.tag(), &payload[..]].concat();
             assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
         }
+        let as_salt = [crate::format::SALT_TAG, &payload[..]].concat();
+        assert!(vld0::verify_ed25519(&device, &as_salt, &signature).is_err());
     }
     // After activation the unlocked passkey session signs the session message with the same
-    // key and tag (a restarted device-key member), and only that purpose.
+    // key and tag (a restarted device-key member), and only that format.
     assert_eq!(
         passkey::sign_device_session(&prf, COMMUNITY, payload).unwrap(),
         candidate
-            .sign_device(DevicePurpose::DeviceSession, payload)
+            .sign_device(crate::DeviceFormat::DeviceSession, payload)
             .unwrap()
     );
     assert!(
         passkey::sign_device_session(&prf, "another-community", payload).unwrap()
             != candidate
-                .sign_device(DevicePurpose::DeviceSession, payload)
+                .sign_device(crate::DeviceFormat::DeviceSession, payload)
                 .unwrap()
     );
-    // The opening signer also rebuilds the salt signature (same bytes as before activation)
-    // and never signs the join.
+    // The opening rebuilds the candidate's stamp salt bit-exact: SHA-256 of the device
+    // signature over salt tag || payload, which never leaves ckmg.
+    let salt = candidate.device_salt(payload).unwrap();
     assert_eq!(
-        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::SaltDerivation, payload)
-            .unwrap(),
-        candidate
-            .sign_device(DevicePurpose::SaltDerivation, payload)
-            .unwrap()
+        passkey::device_salt(&prf, COMMUNITY, payload).unwrap(),
+        salt
     );
-    assert_eq!(
-        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::DeviceJoin, payload),
-        Err(Error::Unauthorized)
+    let expected: [u8; 32] = {
+        use sha2::Digest as _;
+        let seed = passkey::device_seed(&prf, COMMUNITY).unwrap();
+        sha2::Sha256::digest(vld0::sign_ed25519(
+            &seed,
+            &[crate::format::SALT_TAG, &payload[..]].concat(),
+        ))
+        .into()
+    };
+    assert_eq!(salt, expected);
+    assert_ne!(
+        passkey::device_salt(&prf, "another-community", payload).unwrap(),
+        salt
     );
     // Only the restored device's re-confirmation signer (crate-private, reached through the
     // authenticated initial ACK) signs the join, with the enrollment's key and tag; another
@@ -586,16 +596,16 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
     assert_eq!(
         passkey::sign_device_join_restored(&prf, COMMUNITY, payload).unwrap(),
         candidate
-            .sign_device(DevicePurpose::DeviceJoin, payload)
+            .sign_device(crate::DeviceFormat::DeviceJoin, payload)
             .unwrap()
     );
     assert!(
         passkey::sign_device_join_restored(&prf, "another-community", payload).unwrap()
             != candidate
-                .sign_device(DevicePurpose::DeviceJoin, payload)
+                .sign_device(crate::DeviceFormat::DeviceJoin, payload)
                 .unwrap()
     );
-    let session_limit = MAX_MESSAGE_BYTES - DevicePurpose::DeviceSession.tag().len();
+    let session_limit = MAX_MESSAGE_BYTES - crate::DeviceFormat::DeviceSession.tag().len();
     assert_eq!(
         passkey::sign_device_session(&prf, COMMUNITY, &vec![0; session_limit + 1]),
         Err(Error::Limit)
@@ -606,117 +616,111 @@ shared!(pre_activation_device_signatures_bind_exactly_one_purpose, {
         lineage.devices,
         [passkey::device_public_key(&prf, COMMUNITY).unwrap()]
     );
-    let limit = MAX_MESSAGE_BYTES - DevicePurpose::SaltDerivation.tag().len();
-    assert!(
-        candidate
-            .sign_device(DevicePurpose::SaltDerivation, &vec![0; limit])
-            .is_ok()
-    );
+    let limit = MAX_MESSAGE_BYTES - crate::format::SALT_TAG.len();
+    assert!(candidate.device_salt(&vec![0; limit]).is_ok());
     assert_eq!(
-        candidate.sign_device(DevicePurpose::SaltDerivation, &vec![0; limit + 1]),
+        candidate.device_salt(&vec![0; limit + 1]),
         Err(Error::Limit)
     );
 });
 
-shared!(wallet_birth_device_signs_only_for_the_wallet_device, {
-    // The fixed wire tag: a change breaks every server and every recorded vector.
+const BIRTH: [DeviceFormat; 2] = [
+    DeviceFormat::WalletBirthDevice,
+    DeviceFormat::WalletBirthPassport,
+];
+
+shared!(wallet_birth_formats_sign_only_for_the_wallet_device, {
+    // The fixed wire tags: a change breaks every server and every recorded vector.
     assert_eq!(
-        DevicePurpose::WalletBirthDevice.tag(),
+        DeviceFormat::WalletBirthDevice.tag(),
         b"cvld.wallet-birth-device.v1\0"
+    );
+    assert_eq!(
+        DeviceFormat::WalletBirthPassport.tag(),
+        b"cvld.wallet-birth-passport.v1\0"
     );
     let payload = b"origin, account, credential, c and K";
     let mut time = Time::default();
     let (prf, wallet) = candidate_in(&mut time, "wallet");
     let device = *passkey::device_public_key(&prf, "wallet").unwrap().value();
-    // Before activation: the enrollment's device key signs under the birth tag only.
-    let signature = wallet
-        .sign_device(DevicePurpose::WalletBirthDevice, payload)
-        .unwrap();
-    let signed = [DevicePurpose::WalletBirthDevice.tag(), &payload[..]].concat();
-    vld0::verify_ed25519(&device, &signed, &signature).unwrap();
-    assert!(vld0::verify_ed25519(&device, payload, &signature).is_err());
-    for other in [
-        DevicePurpose::DeviceJoin,
-        DevicePurpose::DeviceSession,
-        DevicePurpose::SaltDerivation,
-    ] {
-        let as_other = [other.tag(), &payload[..]].concat();
-        assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
+    for format in BIRTH {
+        // Before activation: the enrollment signs the format under its own tag only.
+        let signature = wallet.sign_device(format, payload).unwrap();
+        let signed = [format.tag(), &payload[..]].concat();
+        vld0::verify_ed25519(&device, &signed, &signature).unwrap();
+        assert!(vld0::verify_ed25519(&device, payload, &signature).is_err());
+        for other in DeviceFormat::ALL
+            .into_iter()
+            .filter(|other| *other != format)
+        {
+            let as_other = [other.tag(), &payload[..]].concat();
+            assert!(vld0::verify_ed25519(&device, &as_other, &signature).is_err());
+        }
+        // The opening gives the same bytes (Ed25519 is deterministic, same key, same tag).
+        assert_eq!(
+            passkey::sign_device_birth(&prf, "wallet", format, payload).unwrap(),
+            signature
+        );
     }
-    // The opened signer gives the same bytes (Ed25519 is deterministic, same key, same tag).
-    assert_eq!(
-        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::WalletBirthDevice, payload)
-            .unwrap(),
-        signature
-    );
-    // The opened signer still refuses the join, also in the wallet community.
-    assert_eq!(
-        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::DeviceJoin, payload),
-        Err(Error::Unauthorized)
-    );
-    // A community device key never signs the wallet birth binding, before or after activation.
-    let (prf, community) = candidate(&mut time);
-    assert_eq!(
-        community.sign_device(DevicePurpose::WalletBirthDevice, payload),
-        Err(Error::Unauthorized)
-    );
-    assert_eq!(
-        passkey::sign_device_opened(&prf, COMMUNITY, DevicePurpose::WalletBirthDevice, payload),
-        Err(Error::Unauthorized)
-    );
-    let limit = MAX_MESSAGE_BYTES - DevicePurpose::WalletBirthDevice.tag().len();
-    assert_eq!(
-        passkey::sign_device_opened(
-            &prf,
-            "wallet",
-            DevicePurpose::WalletBirthDevice,
-            &vec![0; limit + 1]
-        ),
-        Err(Error::Limit)
-    );
+    // The opening's birth signer signs no other format, also in the wallet community.
+    for format in DeviceFormat::ALL.into_iter().filter(|f| !BIRTH.contains(f)) {
+        assert_eq!(
+            passkey::sign_device_birth(&prf, "wallet", format, payload),
+            Err(Error::Unauthorized)
+        );
+    }
 });
 
-shared!(wallet_birth_passport_signs_only_for_the_wallet_device, {
-    assert_eq!(
-        DevicePurpose::WalletBirthPassport.tag(),
-        b"cvld.wallet-birth-passport.v1\0"
-    );
-    let payload = crate::wallet_birth_passport_payload(b"issuance request bytes");
-    assert_ne!(
-        payload,
-        crate::wallet_birth_passport_payload(b"issuance request byteS")
-    );
+shared!(wallet_birth_formats_are_refused_outside_the_wallet_scope, {
+    let payload = b"origin, account, credential, c and K";
     let mut time = Time::default();
-    let (prf, wallet) = candidate_in(&mut time, "wallet");
-    let device = *passkey::device_public_key(&prf, "wallet").unwrap().value();
-    let signature = wallet
-        .sign_device(DevicePurpose::WalletBirthPassport, &payload)
-        .unwrap();
-    let signed = [DevicePurpose::WalletBirthPassport.tag(), &payload[..]].concat();
-    vld0::verify_ed25519(&device, &signed, &signature).unwrap();
-    // A birth-device signature over the same bytes is a different message.
-    let as_device = [DevicePurpose::WalletBirthDevice.tag(), &payload[..]].concat();
-    assert!(vld0::verify_ed25519(&device, &as_device, &signature).is_err());
-    assert_eq!(
-        passkey::sign_device_opened(&prf, "wallet", DevicePurpose::WalletBirthPassport, &payload)
-            .unwrap(),
-        signature
-    );
-    let (prf, community) = candidate(&mut time);
-    assert_eq!(
-        community.sign_device(DevicePurpose::WalletBirthPassport, &payload),
-        Err(Error::Unauthorized)
-    );
-    assert_eq!(
-        passkey::sign_device_opened(
-            &prf,
-            COMMUNITY,
-            DevicePurpose::WalletBirthPassport,
-            &payload
-        ),
-        Err(Error::Unauthorized)
-    );
+    let (prf, community) = candidate_in(&mut time, COMMUNITY);
+    for format in BIRTH {
+        assert_eq!(
+            community.sign_device(format, payload),
+            Err(Error::Unauthorized)
+        );
+        assert_eq!(
+            passkey::sign_device_birth(&prf, COMMUNITY, format, payload),
+            Err(Error::Unauthorized)
+        );
+        // Every class, with a community or an unknown scope: refused.
+        let message = [format.tag(), &payload[..]].concat();
+        for class in ALL_CLASSES {
+            for scope in [None, Some(COMMUNITY)] {
+                assert_eq!(
+                    format.admit(class, scope, &message),
+                    Err(Error::Unauthorized)
+                );
+            }
+        }
+    }
 });
+
+const ALL_CLASSES: [SigningClass; 6] = [
+    SigningClass::Enrollment,
+    SigningClass::Opening,
+    SigningClass::Provenance,
+    SigningClass::Admitted,
+    SigningClass::Profile,
+    SigningClass::Delegate,
+];
+
+#[test]
+fn wallet_birth_formats_are_refused_in_every_other_class() {
+    let payload = b"origin, account, credential, c and K";
+    for format in BIRTH {
+        let message = [format.tag(), &payload[..]].concat();
+        for class in ALL_CLASSES {
+            let result = format.admit(class, Some("wallet"), &message);
+            if matches!(class, SigningClass::Enrollment | SigningClass::Opening) {
+                assert_eq!(result, Ok(()));
+            } else {
+                assert_eq!(result, Err(Error::Unauthorized), "{format:?} {class:?}");
+            }
+        }
+    }
+}
 
 #[test]
 fn wallet_birth_device_payload_is_length_prefixed_in_fixed_order() {

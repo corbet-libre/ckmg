@@ -24,6 +24,9 @@ pub struct AdmittedCommand {
     /// Exact original owner bytes for device signing or fixed account-device
     /// authorization. Never a request-body transcript.
     pub transcript: Option<Vec<u8>>,
+    /// The exact device-key format of `transcript`, required for `SignDeviceEd25519` and
+    /// absent otherwise. Keys signs only a transcript led by this format's tag.
+    pub format: Option<crate::DeviceFormat>,
     /// Exclusive trusted Unix-second deadline.
     pub expires: u64,
 }
@@ -78,6 +81,14 @@ impl IntentAdmission {
                     || command.target.is_some()
                     || command.statement.is_some()
             })
+            || (command.action == Action::SignDeviceEd25519) != command.format.is_some()
+            || command.format.is_some_and(|format| {
+                command.transcript.as_deref().is_none_or(|bytes| {
+                    format
+                        .admit(crate::SigningClass::Admitted, None, bytes)
+                        .is_err()
+                })
+            })
         {
             return Err(Error::Encoding);
         }
@@ -127,7 +138,9 @@ impl IntentVerifier {
             || match (request.signing, command.transcript.as_deref()) {
                 (None, None) => false,
                 (Some(signing), Some(bytes)) => {
-                    signing.transcript != bytes || signing.expires != command.expires
+                    signing.transcript != bytes
+                        || signing.expires != command.expires
+                        || signing.format != command.format
                 }
                 _ => true,
             }

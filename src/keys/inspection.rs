@@ -249,12 +249,7 @@ impl CheckpointBootstrap {
     /// }
     /// ```
     pub fn record(&self, child: Option<u8>) -> Result<CheckpointRecordCustody<'_>, Error> {
-        let label = match child {
-            None => "vault.checkpoint".to_owned(),
-            Some(index) if index < 10 => format!("vault.checkpoint.chunk.{index}"),
-            Some(_) => return Err(Error::Limit),
-        };
-        let purpose = Purpose::new(Scope::Member, &label, 0)?;
+        let purpose = super::checkpoint_record_purpose(child.map(usize::from))?;
         let lineage = &self.inspection.lineage;
         let context = encode(
             b"ckmg.purpose.context.v1\0",

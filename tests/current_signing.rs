@@ -13,7 +13,8 @@ use support::*;
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 const ORIGIN: &str = "https://garden.example.com";
-const BYTES: &[u8] = b"exact original owner delegation";
+const BYTES: &[u8] = b"cfrm.account.request.v1\0exact original owner delegation";
+const FORMAT: DeviceFormat = DeviceFormat::AccountRequest;
 
 struct Held {
     current: Guard,
@@ -195,6 +196,7 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
                         target: None,
                         statement: None,
                         transcript: Some(BYTES.to_vec()),
+                        format: (mode != 14).then_some(FORMAT),
                         expires: 1200,
                     },
                     1000,
@@ -202,15 +204,16 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
                 .unwrap();
             if mode == 8 || mode == 9 {
                 assert!(
-                    keys.sign_device_ed25519_current(BYTES, 1200)
+                    keys.sign_device_ed25519_current(FORMAT, BYTES, 1200)
                         .now_or_never()
                         .is_none()
                 );
             } else {
                 let result = keys
                     .sign_device_ed25519_current(
+                        FORMAT,
                         if mode == 12 {
-                            b"changed transcript"
+                            b"cfrm.account.request.v1\0changed transcript"
                         } else {
                             BYTES
                         },
@@ -221,7 +224,12 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
                     let signature = result.unwrap();
                     verify_ed25519(device.value(), BYTES, &signature).unwrap();
                     assert!(
-                        verify_ed25519(device.value(), b"changed transcript", &signature).is_err()
+                        verify_ed25519(
+                            device.value(),
+                            b"cfrm.account.request.v1\0changed transcript",
+                            &signature
+                        )
+                        .is_err()
                     );
                 } else {
                     assert!(
@@ -238,7 +246,11 @@ fn current_signing_checks_the_actual_owner_after_storage_and_consumes_intent() {
             if mode != 0 {
                 assert_eq!(keys.state(), State::Locked);
             }
-            assert!(keys.sign_device_ed25519_current(BYTES, 1200).await.is_err());
+            assert!(
+                keys.sign_device_ed25519_current(FORMAT, BYTES, 1200)
+                    .await
+                    .is_err()
+            );
             assert_eq!(keys.state(), State::Locked);
             drop(admitted);
         }

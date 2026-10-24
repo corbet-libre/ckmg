@@ -156,7 +156,7 @@ fn admit(
     plan: &AccountDevicePlan,
     action: Action,
     now: u64,
-) -> IntentGuard {
+) -> Option<IntentGuard> {
     admission
         .admit(
             AdmittedCommand {
@@ -169,11 +169,14 @@ fn admit(
                 target: None,
                 statement: None,
                 transcript: Some(plan.signing_bytes().to_vec()),
+                format: None,
                 expires: plan.expires_at(),
             },
             now,
         )
-        .unwrap()
+        // Device signing is typed, so the account-device bytes are never admitted for it.
+        .inspect_err(|_| assert_eq!(action, Action::SignDeviceEd25519))
+        .ok()
 }
 
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
