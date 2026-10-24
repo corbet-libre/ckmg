@@ -328,3 +328,114 @@ fn delegate_class_signs_only_the_device_session() {
         );
     }
 }
+
+/// The pairing formats: the approval is exact-admitted (Admitted only), the possession is signed
+/// only by the typed opening signer (Opening only); each message is led by exactly its tag and
+/// the signatures are valid for no other format.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn pairing_formats_belong_to_their_one_class() {
+    block_on(async {
+        assert_eq!(
+            DeviceFormat::PairingApproval.tag(),
+            b"cvld.device-pairing-approval.v1\0"
+        );
+        assert_eq!(
+            DeviceFormat::PairingPossession.tag(),
+            b"cvld.device-pairing-possession.v1\0"
+        );
+        for class in [
+            SigningClass::Enrollment,
+            SigningClass::Opening,
+            SigningClass::Provenance,
+            SigningClass::Profile,
+            SigningClass::Delegate,
+        ] {
+            assert!(!DeviceFormat::PairingApproval.allowed(class), "{class:?}");
+        }
+        assert!(DeviceFormat::PairingApproval.allowed(SigningClass::Admitted));
+        for class in [
+            SigningClass::Enrollment,
+            SigningClass::Admitted,
+            SigningClass::Provenance,
+            SigningClass::Profile,
+            SigningClass::Delegate,
+        ] {
+            assert!(!DeviceFormat::PairingPossession.allowed(class), "{class:?}");
+        }
+        assert!(DeviceFormat::PairingPossession.allowed(SigningClass::Opening));
+
+        let digest = [7u8; 32];
+        let approval = PairingApproval::new("a", &digest).unwrap();
+        assert_eq!(
+            DeviceFormat::of(&approval.message()),
+            Some(DeviceFormat::PairingApproval)
+        );
+        let device = passkey::device_public_key(&prf(1), "a").unwrap();
+        let possession =
+            PairingPossession::new("a", PairingStep::Add, "c", device.value()).unwrap();
+        assert_eq!(
+            DeviceFormat::of(&possession.message()),
+            Some(DeviceFormat::PairingPossession)
+        );
+
+        // The host signs the approval through exact admission only, with its format set.
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut created = machine(&store, &time, &guard, 41);
+        create(&mut created, &guard, &prf(1), &binding("a")).await;
+        drop(created);
+        let mut keys = Keys::new(
+            store.clone(),
+            time.clone(),
+            Random::new(42),
+            Permit {
+                guard: guard.clone(),
+                time: time.clone(),
+            },
+        );
+        keys.unlock(&prf(1), "a").await.unwrap();
+        let signature = keys
+            .sign_device_ed25519_current(DeviceFormat::PairingApproval, &approval.message(), 1200)
+            .await
+            .unwrap();
+        verify_ed25519(device.value(), &approval.message(), &signature).unwrap();
+        // The approval signature is not a possession, and Keys never signs a possession or
+        // an approval under another format.
+        assert!(verify_ed25519(device.value(), &possession.message(), &signature).is_err());
+        for (format, message) in [
+            (DeviceFormat::PairingPossession, possession.message()),
+            (DeviceFormat::DeviceSession, approval.message()),
+            (DeviceFormat::PairingApproval, possession.message()),
+        ] {
+            assert_eq!(
+                keys.sign_device_ed25519_current(format, &message, 1200)
+                    .await,
+                Err(Error::Unauthorized),
+                "{format:?}"
+            );
+        }
+
+        // The guest's opening signs the typed possession for its own key and community only.
+        let signed = passkey::sign_pairing_possession(&prf(1), "a", &possession).unwrap();
+        verify_ed25519(device.value(), &possession.message(), &signed).unwrap();
+        assert!(verify_ed25519(device.value(), &approval.message(), &signed).is_err());
+        let other = PairingPossession::new("a", PairingStep::Add, "c", &[9; 32]).unwrap();
+        assert_eq!(
+            passkey::sign_pairing_possession(&prf(1), "a", &other),
+            Err(Error::Unauthorized)
+        );
+        let elsewhere = PairingPossession::new("b", PairingStep::Add, "c", device.value()).unwrap();
+        assert_eq!(
+            passkey::sign_pairing_possession(&prf(1), "a", &elsewhere),
+            Err(Error::Unauthorized)
+        );
+        // Add and activate are different messages.
+        let activate =
+            PairingPossession::new("a", PairingStep::Activate, "c", device.value()).unwrap();
+        assert_ne!(activate.message(), possession.message());
+        assert!(PairingApproval::new("", &digest).is_err());
+        assert!(PairingPossession::new("a", PairingStep::Add, "", device.value()).is_err());
+    });
+}

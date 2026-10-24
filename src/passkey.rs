@@ -178,6 +178,31 @@ pub fn sign_device_session(
     )
 }
 
+/// The pairing guest's possession proof (`DeviceFormat::PairingPossession`) from its unlocked
+/// opening. The only input is a typed [`crate::PairingPossession`], which must name this
+/// community and exactly this opening's own device key; no other format is reachable. The
+/// signature grants nothing alone: the community requires the approved PENDING record of the
+/// same key.
+pub fn sign_pairing_possession(
+    prf: &PrfOutput,
+    community: &str,
+    possession: &crate::PairingPossession<'_>,
+) -> Result<[u8; 64], Error> {
+    let seed = device_seed(prf, community)?;
+    if possession.community() != community
+        || possession.device() != crate::vld0::public_key(&seed).value()
+    {
+        return Err(Error::Unauthorized);
+    }
+    crate::format::sign_payload(
+        &seed,
+        crate::DeviceFormat::PairingPossession,
+        crate::SigningClass::Opening,
+        Some(community),
+        &possession.payload(),
+    )
+}
+
 /// The wallet device key's birth signature (`DeviceFormat::WalletBirthDevice` or
 /// `WalletBirthPassport`, the tag prepended) from the unlocked wallet opening: a registration
 /// restarted after activation binds its wallet device from the unlocked session. Opening class,

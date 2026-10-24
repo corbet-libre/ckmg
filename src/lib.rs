@@ -16,6 +16,8 @@
 mod error;
 mod format;
 pub use format::{DeviceFormat, SigningClass};
+mod pairing;
+pub use pairing::{PairingApproval, PairingPossession, PairingStep};
 mod intent;
 pub use intent::{AdmittedCommand, IntentAdmission, IntentGuard, IntentVerifier, intent_channel};
 #[cfg(all(feature = "browser-tor", target_arch = "wasm32"))]

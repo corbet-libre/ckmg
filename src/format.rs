@@ -132,8 +132,9 @@ impl DeviceFormat {
         match self {
             Self::DeviceJoin => matches!(class, Enrollment | Provenance),
             Self::DeviceSession => matches!(class, Enrollment | Opening | Admitted | Delegate),
-            // Signed only by the step-bound pairing signer, which no class here names.
-            Self::PairingPossession => false,
+            // Signed only by `passkey::sign_pairing_possession`, from the unlocked opening and
+            // a typed `PairingPossession`; no raw-payload opening signer takes this format.
+            Self::PairingPossession => matches!(class, Opening),
             Self::GardenSession
             | Self::PairingApproval
             | Self::AccountRequest
