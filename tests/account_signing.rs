@@ -60,6 +60,7 @@ impl Authority for NoFinalHook {
 }
 
 struct World<A: Authority> {
+    memory: Memory,
     keys: Keys<Memory, Time, Random, A>,
     admission: IntentAdmission,
     lineage: Lineage,
@@ -93,6 +94,7 @@ async fn world<A: Authority>(wrap: impl FnOnce(Owner) -> A) -> World<A> {
     keys.unlock(&prf(1), "wallet").await.unwrap();
     let key = engine.prepare_account_key("wallet", [1; 32]).unwrap();
     World {
+        memory,
         keys,
         admission,
         lineage,
@@ -216,5 +218,61 @@ fn an_owner_without_the_final_current_check_cannot_sign() {
                 .is_err()
         );
         assert!(ledger.is_empty());
+    });
+}
+
+// X3 H1 attacks (K1 S2): each held before the fix.
+
+#[test]
+fn two_fresh_caller_ledgers_never_sign_two_digests_for_one_slot_and_phase() {
+    block_on(async {
+        let mut w = world(|owner| owner).await;
+        let guard = w.admit(Action::SignContact, [7; 32]);
+        w.sign(&mut SigningLedger::new(), SigningPhase::Contact, [7; 32])
+            .await
+            .unwrap();
+        drop(guard);
+        let _guard = w.admit(Action::SignContact, [8; 32]);
+        assert_eq!(
+            w.sign(&mut SigningLedger::new(), SigningPhase::Contact, [8; 32])
+                .await,
+            Err(Error::Unauthorized)
+        );
+    });
+}
+
+#[test]
+fn the_ledger_survives_lock_and_unlock() {
+    block_on(async {
+        let mut w = world(|owner| owner).await;
+        let guard = w.admit(Action::SignResolution, [7; 32]);
+        w.sign(&mut SigningLedger::new(), SigningPhase::Resolution, [7; 32])
+            .await
+            .unwrap();
+        drop(guard);
+        w.keys.lock();
+        w.keys.unlock(&prf(1), "wallet").await.unwrap();
+        let _guard = w.admit(Action::SignResolution, [8; 32]);
+        assert_eq!(
+            w.sign(&mut SigningLedger::new(), SigningPhase::Resolution, [8; 32])
+                .await,
+            Err(Error::Unauthorized)
+        );
+    });
+}
+
+#[test]
+fn a_lost_ledger_cas_releases_no_signature() {
+    block_on(async {
+        let mut w = world(|owner| owner).await;
+        let _guard = w.admit(Action::SignAcknowledgment, [7; 32]);
+        w.memory.0.borrow_mut().fault = Fault::Conflict;
+        let writes = w.memory.0.borrow().writes;
+        assert!(
+            w.sign(&mut SigningLedger::new(), SigningPhase::Acknowledgment, [7; 32])
+                .await
+                .is_err()
+        );
+        assert_eq!(w.memory.0.borrow().writes, writes);
     });
 }

@@ -12,6 +12,28 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
     /// asynchronous check, final synchronous recheck after the last Store await), signs,
     /// records the signature in `ledger` and returns it. The caller persists `ledger`
     /// BEFORE sending the signature anywhere, and resends it unchanged.
+    ///
+    /// Ordinary `Use` lends no account-key signer: the Wallet engine restores the
+    /// key, but cannot sign with it (X3 H1).
+    ///
+    /// ```no_run
+    /// # use ckmg::*;
+    /// # async fn restore<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>, sealed: &wallet_engine::account_key::SealedAccountKey) {
+    /// let engine = keys.wallet_engine().await.unwrap();
+    /// let key = engine.restore_account_key(sealed, "wallet").unwrap();
+    /// # let _ = key;
+    /// # }
+    /// ```
+    /// ```compile_fail
+    /// # use ckmg::*;
+    /// # async fn escape<S: SecureStore, C: Clock, R: Entropy, A: Authority>(
+    /// #     keys: &mut Keys<S, C, R, A>, sealed: &wallet_engine::account_key::SealedAccountKey) {
+    /// let engine = keys.wallet_engine().await.unwrap();
+    /// let key = engine.restore_account_key(sealed, "wallet").unwrap();
+    /// let _ = key.sign_prehash(&engine, &[0; 32]);
+    /// # }
+    /// ```
     #[allow(clippy::too_many_arguments)]
     pub async fn sign_account_digest(
         &mut self,
