@@ -36,6 +36,8 @@ pub enum DeviceFormat {
     PairingApproval,
     /// The account request (cblc `cfrm.account.request.v1`).
     AccountRequest,
+    /// The account status request (cblc `cfrm.account.status.v1`, signed for the owner status check).
+    AccountStatus,
     /// The record-witness recipient request (cblc).
     RecordRecipient,
     /// The accounting delegation (cblc).
@@ -79,13 +81,14 @@ pub enum SigningClass {
 
 impl DeviceFormat {
     /// Every format, for exhaustive checks.
-    pub const ALL: [DeviceFormat; 17] = [
+    pub const ALL: [DeviceFormat; 18] = [
         Self::DeviceJoin,
         Self::DeviceSession,
         Self::GardenSession,
         Self::PairingPossession,
         Self::PairingApproval,
         Self::AccountRequest,
+        Self::AccountStatus,
         Self::RecordRecipient,
         Self::AccountingDelegation,
         Self::ForumChallenge,
@@ -108,6 +111,7 @@ impl DeviceFormat {
             Self::PairingPossession => b"cvld.device-pairing-possession.v1\0",
             Self::PairingApproval => b"cvld.device-pairing-approval.v1\0",
             Self::AccountRequest => b"cfrm.account.request.v1\0",
+            Self::AccountStatus => b"cfrm.account.status.v1\0",
             Self::RecordRecipient => b"[\"cblc.record-recipient.v1\",",
             Self::AccountingDelegation => b"[\"cmsg.accounting-delegation.v1\",",
             Self::ForumChallenge => b"[\"cswb.challenge.v1\",",
@@ -133,6 +137,7 @@ impl DeviceFormat {
             Self::GardenSession
             | Self::PairingApproval
             | Self::AccountRequest
+            | Self::AccountStatus
             | Self::RecordRecipient
             | Self::AccountingDelegation
             | Self::ForumChallenge

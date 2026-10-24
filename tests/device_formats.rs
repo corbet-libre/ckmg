@@ -150,6 +150,28 @@ fn exact_admission_signs_only_admitted_formats_led_by_their_tag() {
     });
 }
 
+/// The owner status request is signed only through exact admission.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn account_status_is_allowed_in_the_admitted_class_only() {
+    let tag = DeviceFormat::AccountStatus.tag();
+    assert_eq!(tag, b"cfrm.account.status.v1\0");
+    assert_eq!(
+        DeviceFormat::of(&tagged(tag)),
+        Some(DeviceFormat::AccountStatus)
+    );
+    assert!(DeviceFormat::AccountStatus.allowed(SigningClass::Admitted));
+    for class in [
+        SigningClass::Enrollment,
+        SigningClass::Opening,
+        SigningClass::Provenance,
+        SigningClass::Profile,
+        SigningClass::Delegate,
+    ] {
+        assert!(!DeviceFormat::AccountStatus.allowed(class), "{class:?}");
+    }
+}
+
 #[cfg(feature = "profile-envelope")]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
