@@ -435,7 +435,9 @@ shared!(delegated_custody_refuses_every_root_operation, {
     }
     // Lineage changes, rotation and pairing.
     assert_eq!(
-        keys.delegate_device(std::slice::from_ref(&board), CEREMONY).await.err(),
+        keys.delegate_device(std::slice::from_ref(&board), CEREMONY)
+            .await
+            .err(),
         no_root
     );
     assert_eq!(
