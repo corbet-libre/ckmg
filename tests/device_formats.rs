@@ -314,3 +314,17 @@ fn reserved_purposes_stay_internal() {
         assert!(!purpose(Scope::Member, "profile").is_reserved());
     });
 }
+
+/// The delegation key's class signs the community session and nothing else; no other class
+/// signs a format only the delegation class admits (there is none).
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn delegate_class_signs_only_the_device_session() {
+    for format in DeviceFormat::ALL {
+        assert_eq!(
+            format.allowed(SigningClass::Delegate),
+            format == DeviceFormat::DeviceSession,
+            "{format:?}"
+        );
+    }
+}

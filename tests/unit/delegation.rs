@@ -292,7 +292,7 @@ shared!(
         assert_eq!(now.revision, before.revision + 2);
         // Session signatures by the delegation key use the existing DeviceSession tag.
         let signature = first.sign_device_session(b"session").unwrap();
-        let mut message = DevicePurpose::DeviceSession.tag().to_vec();
+        let mut message = crate::DeviceFormat::DeviceSession.tag().to_vec();
         message.extend_from_slice(b"session");
         vld0::verify_ed25519(first.device_public_key().value(), &message, &signature).unwrap();
     }
@@ -457,8 +457,13 @@ shared!(delegated_custody_refuses_every_root_operation, {
     assert_eq!(keys.pending_output().await.err(), no_root);
     // Identity proofs and device-key lending.
     assert_eq!(keys.with_identity(|_| ()).await.err(), no_root);
-    assert_eq!(keys.with_device_ed25519_signer(|_| ()).await.err(), no_root);
-    assert_eq!(keys.sign_device_ed25519(b"x", 2000).await.err(), no_root);
+    let transcript = [crate::DeviceFormat::DeviceSession.tag(), b"x".as_slice()].concat();
+    assert_eq!(
+        keys.sign_device_ed25519_current(crate::DeviceFormat::DeviceSession, &transcript, 2000)
+            .await
+            .err(),
+        no_root
+    );
     #[cfg(feature = "profile-envelope")]
     assert_eq!(keys.with_profile_custody(|_, _| ()).await.err(), no_root);
     #[cfg(feature = "wallet-engine")]

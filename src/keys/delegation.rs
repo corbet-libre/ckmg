@@ -115,10 +115,16 @@ impl DeviceDelegation {
         &self.store
     }
 
-    /// The delegation key's community session signature (`DevicePurpose::DeviceSession`,
-    /// same tag as the passkey device key). No other device purpose is signed here.
+    /// The delegation key's community session signature (`DeviceFormat::DeviceSession`,
+    /// same tag as the passkey device key, class `Delegate`). No other device purpose is signed here.
     pub fn sign_device_session(&self, payload: &[u8]) -> Result<[u8; 64], Error> {
-        DevicePurpose::DeviceSession.sign(&self.device, payload)
+        crate::format::sign_payload(
+            &self.device,
+            crate::DeviceFormat::DeviceSession,
+            crate::SigningClass::Delegate,
+            None,
+            payload,
+        )
     }
 
     /// Plaintext form for the caller's sealed resume store only; seal it before it
@@ -234,13 +240,8 @@ impl<'a> Reader<'a> {
 
 /// Internal namespaces (compound recovery records, transport identities) are never
 /// delegated or derived in Delegated custody, whatever their scope.
-const RESERVED: [&str; 2] = ["vault.", "tor."];
-
 fn reserved(purpose: &Purpose) -> bool {
-    NodePurpose::of(purpose).is_some()
-        || RESERVED
-            .iter()
-            .any(|prefix| purpose.label().starts_with(prefix))
+    purpose.is_reserved() || NodePurpose::of(purpose).is_some()
 }
 
 /// The closed purpose list: bounded, valid, member scope, no reserved purpose, no

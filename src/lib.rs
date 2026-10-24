@@ -59,11 +59,12 @@ pub use keys::ProfileSigner;
 pub use keys::{
     AccountDeviceAuthorization, AccountDevicePlan, Change, CheckpointBootstrap,
     CheckpointInspection, CheckpointInspector, CheckpointRecordCustody, CompletionIntent,
-    DeviceAttestation, DeviceDelegation, DeviceInfo, Ed25519Signer, EnrollmentSeed, EphemeralTransport,
-    InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys, LineageReadCapability,
-    LineageReadCustody, MAX_DELEGATED_PURPOSES, OperationId, PendingCompletion, PendingCreation, ProvisionalLineage,
-    Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation, Vld0Signer,
-    inspect_checkpoint, wallet_birth_device_payload, wallet_birth_passport_payload,
+    DeviceAttestation, DeviceDelegation, DeviceInfo, Ed25519Signer, EnrollmentSeed,
+    EphemeralTransport, InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys,
+    LineageReadCapability, LineageReadCustody, MAX_DELEGATED_PURPOSES, OperationId,
+    PendingCompletion, PendingCreation, ProvisionalLineage, Receipt, RestoreRoot, State,
+    TransportSession, UnenrolledCreation, Vld0Signer, inspect_checkpoint,
+    wallet_birth_device_payload, wallet_birth_passport_payload,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
