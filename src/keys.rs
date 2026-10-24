@@ -2383,8 +2383,9 @@ fn encode_checkpoint(
     if metadata.len() + ledger.encoded_len() + 101 > MAX_CHECKPOINT_BYTES - 64 {
         return Err(Error::Limit);
     }
-    let mut bytes =
-        Zeroizing::new(Vec::with_capacity(4 + metadata.len() + ledger.encoded_len() + 97));
+    let mut bytes = Zeroizing::new(Vec::with_capacity(
+        4 + metadata.len() + ledger.encoded_len() + 97,
+    ));
     bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&metadata);
     // The ledger section sits between metadata and material; it is absent when empty,
@@ -2398,9 +2399,8 @@ fn decode_checkpoint(bytes: &[u8]) -> Result<(Metadata, Material), Error> {
     let length = bytes.get(..4).ok_or(Error::Encoding)?;
     let length = u32::from_le_bytes(length.try_into().map_err(|_| Error::Encoding)?) as usize;
     let end = 4usize.checked_add(length).ok_or(Error::Encoding)?;
-    let mut metadata: Metadata =
-        serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
-            .map_err(|_| Error::Encoding)?;
+    let mut metadata: Metadata = serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
+        .map_err(|_| Error::Encoding)?;
     let (ledger, rest) =
         crate::signing_ledger::AccountLedger::decode(bytes.get(end..).ok_or(Error::Encoding)?)?;
     metadata.ledger = ledger;

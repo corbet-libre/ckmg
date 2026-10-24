@@ -125,7 +125,13 @@ async fn world<A: Authority>(wrap: impl FnOnce(Owner) -> A) -> World<A> {
 
 impl<A: Authority> World<A> {
     fn admit(&mut self, action: Action, statement: [u8; 32]) -> IntentGuard {
-        admit(&mut self.admission, &self.lineage, self.device, action, statement)
+        admit(
+            &mut self.admission,
+            &self.lineage,
+            self.device,
+            action,
+            statement,
+        )
     }
     async fn sign(&mut self, phase: SigningPhase, digest: [u8; 32]) -> Result<[u8; 64], Error> {
         self.keys
@@ -215,7 +221,11 @@ fn no_admission_a_wrong_phase_or_a_wrong_digest_never_signs() {
         drop(guard);
         // None of the refusals held the slot: the right digest signs after unlock.
         w.relock().await;
-        assert!(w.admitted(SigningPhase::Acknowledgment, [9; 32]).await.is_ok());
+        assert!(
+            w.admitted(SigningPhase::Acknowledgment, [9; 32])
+                .await
+                .is_ok()
+        );
     });
 }
 
@@ -309,7 +319,10 @@ fn a_lost_ledger_cas_releases_no_signature() {
         // Nothing was held: after unlock the ledger is re-read and the slot is free.
         w.memory.0.borrow_mut().fault = Fault::None;
         w.relock().await;
-        let signature = w.admitted(SigningPhase::Acknowledgment, [8; 32]).await.unwrap();
+        let signature = w
+            .admitted(SigningPhase::Acknowledgment, [8; 32])
+            .await
+            .unwrap();
         verify_prehash(&w.public, &[8; 32], &signature).unwrap();
     });
 }
@@ -369,7 +382,12 @@ fn the_desk_ledger_import_is_add_only_and_durable() {
             w.sign(SigningPhase::Resolution, [5; 32]).await,
             Err(Error::Unauthorized)
         );
-        assert!(w.keys.import_signing_ledger(b"{\"entries\":[],\"x\":1}").await.is_err());
+        assert!(
+            w.keys
+                .import_signing_ledger(b"{\"entries\":[],\"x\":1}")
+                .await
+                .is_err()
+        );
     });
 }
 
@@ -382,7 +400,10 @@ fn forgetting_a_wave_needs_its_own_admission_with_the_final_receipt() {
         // No admission, or an admission for another wave's statement, forgets nothing.
         assert!(w.keys.forget_wave(SLOT, receipt).await.is_err());
         w.relock().await;
-        let guard = w.admit(Action::ForgetWave, forget_wave_statement(&[6; 32], &receipt));
+        let guard = w.admit(
+            Action::ForgetWave,
+            forget_wave_statement(&[6; 32], &receipt),
+        );
         assert!(w.keys.forget_wave(SLOT, receipt).await.is_err());
         drop(guard);
         w.relock().await;

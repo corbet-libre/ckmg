@@ -587,7 +587,9 @@ fn the_signing_ledger_section_round_trips_and_is_absent_when_empty() {
     assert!(decoded.ledger == metadata.ledger);
     assert!(reparsed.device == material.device);
     assert_eq!(
-        decoded.ledger.admits(&[1; 32], SigningPhase::Contact, &[3; 32]),
+        decoded
+            .ledger
+            .admits(&[1; 32], SigningPhase::Contact, &[3; 32]),
         Err(Error::Unauthorized)
     );
 }

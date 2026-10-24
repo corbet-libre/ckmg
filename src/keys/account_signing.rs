@@ -1,9 +1,9 @@
 //! Account-key signatures behind narrow, exact-digest Keys admissions, with the
 //! one-digest-per-slot-and-phase ledger inside the Keys checkpoint.
 use super::*;
-use crate::{SigningLedger, SigningPhase};
 #[cfg(feature = "wallet-engine")]
 use crate::wallet_engine::account_key::SealedAccountKey;
+use crate::{SigningLedger, SigningPhase};
 
 impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
     /// Sign `digest` with the account key sealed in `sealed`, for one wave `slot` and

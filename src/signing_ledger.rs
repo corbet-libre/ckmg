@@ -317,7 +317,10 @@ mod tests {
         assert_eq!(ledger.len(), 1);
         // Another phase and another slot are independent.
         assert_eq!(ledger.admits(&s, SigningPhase::Resolution, &b), Ok(false));
-        assert_eq!(ledger.admits(&[9; 32], SigningPhase::Contact, &b), Ok(false));
+        assert_eq!(
+            ledger.admits(&[9; 32], SigningPhase::Contact, &b),
+            Ok(false)
+        );
         assert!(ledger.forget(&s));
         assert!(!ledger.forget(&s));
         assert_eq!(ledger.len(), 0);
@@ -335,7 +338,9 @@ mod tests {
         assert!(decoded == empty && rest == [2, 9, 9]);
 
         let mut ledger = AccountLedger::default();
-        ledger.insert([1; 32], SigningPhase::Contact, [2; 32]).unwrap();
+        ledger
+            .insert([1; 32], SigningPhase::Contact, [2; 32])
+            .unwrap();
         ledger
             .insert([1; 32], SigningPhase::Acknowledgment, [3; 32])
             .unwrap();
@@ -364,14 +369,19 @@ mod tests {
     fn the_cap_refuses_and_never_evicts() {
         let mut ledger = AccountLedger::default();
         for n in 0..AccountLedger::MAX_ENTRIES {
-            ledger.insert(slot(n), SigningPhase::Contact, [4; 32]).unwrap();
+            ledger
+                .insert(slot(n), SigningPhase::Contact, [4; 32])
+                .unwrap();
         }
         assert_eq!(
             ledger.insert([0xff; 32], SigningPhase::Contact, [4; 32]),
             Err(Error::Limit)
         );
         // Held digests still re-sign at the cap; the first entry was not evicted.
-        assert_eq!(ledger.admits(&slot(0), SigningPhase::Contact, &[4; 32]), Ok(true));
+        assert_eq!(
+            ledger.admits(&slot(0), SigningPhase::Contact, &[4; 32]),
+            Ok(true)
+        );
         let mut out = Vec::new();
         ledger.encode(&mut out);
         assert_eq!(out.len(), 3 + 1024 * 65);
@@ -388,15 +398,23 @@ mod tests {
         }))
         .unwrap();
         let mut ledger = AccountLedger::default();
-        ledger.insert([1; 32], SigningPhase::Contact, [9; 32]).unwrap();
+        ledger
+            .insert([1; 32], SigningPhase::Contact, [9; 32])
+            .unwrap();
         assert_eq!(ledger.import(&legacy), Ok(true));
         // The held digest stays; the conflicting import entry enables nothing.
-        assert_eq!(ledger.admits(&[1; 32], SigningPhase::Contact, &[9; 32]), Ok(true));
+        assert_eq!(
+            ledger.admits(&[1; 32], SigningPhase::Contact, &[9; 32]),
+            Ok(true)
+        );
         assert_eq!(
             ledger.admits(&[1; 32], SigningPhase::Contact, &[2; 32]),
             Err(Error::Unauthorized)
         );
-        assert_eq!(ledger.admits(&[5; 32], SigningPhase::Resolution, &[6; 32]), Ok(true));
+        assert_eq!(
+            ledger.admits(&[5; 32], SigningPhase::Resolution, &[6; 32]),
+            Ok(true)
+        );
         assert_eq!(ledger.import(&legacy), Ok(false));
         assert_eq!(ledger.len(), 2);
     }
