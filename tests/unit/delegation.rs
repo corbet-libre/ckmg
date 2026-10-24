@@ -310,10 +310,13 @@ shared!(
         for (purposes, error) in [
             (vec![device], Error::InvalidPurpose),
             (
-                vec![Purpose::new(Scope::Member, "vault.checkpoint", 0).unwrap()],
+                vec![reserved_purpose(Scope::Member, "vault.checkpoint", 0)],
                 Error::InvalidPurpose,
             ),
-            (vec![member("tor.anything")], Error::InvalidPurpose),
+            (
+                vec![reserved_purpose(Scope::Member, "tor.anything", 1)],
+                Error::InvalidPurpose,
+            ),
             (
                 vec![member("board"), member("board")],
                 Error::InvalidPurpose,
@@ -426,12 +429,17 @@ shared!(delegated_custody_refuses_every_root_operation, {
     // Purposes outside the delegation and transport purposes.
     assert_eq!(keys.key(member("wallet")).await.err(), no_root);
     for reserved in [
-        Purpose::new(Scope::Device, "tor.node", 1).unwrap(),
-        Purpose::new(Scope::Device, "tor.onion", 1).unwrap(),
-        Purpose::new(Scope::Member, "vault.checkpoint", 0).unwrap(),
-        Purpose::new(Scope::Device, "vault.local", 1).unwrap(),
+        reserved_purpose(Scope::Device, "tor.node", 1),
+        reserved_purpose(Scope::Device, "tor.onion", 1),
+        reserved_purpose(Scope::Member, "vault.checkpoint", 0),
+        reserved_purpose(Scope::Device, "vault.local", 1),
     ] {
-        assert_eq!(keys.key(reserved).await.err(), Some(Error::Unauthorized));
+        // Node purposes reach the Delegated refusal (Unauthorized); the rest fail the
+        // reserved-namespace check in `Keys::key` (InvalidPurpose). Never a handle.
+        assert!(matches!(
+            keys.key(reserved).await.err(),
+            Some(Error::InvalidPurpose | Error::Unauthorized)
+        ));
     }
     // Lineage changes, rotation and pairing.
     assert_eq!(
@@ -639,4 +647,16 @@ shared!(rotation_seals_nothing_to_a_delegate, {
 
 fn delegated_secret_for(f: &Fixture, purpose: &Purpose) -> Secret {
     purpose_secret(f.keys.loaded().unwrap(), purpose, false).unwrap()
+}
+
+/// A reserved-namespace purpose as it could arrive from the wire (`Purpose::new` refuses it).
+fn reserved_purpose(scope: Scope, label: &str, version: u32) -> Purpose {
+    let scope = match scope {
+        Scope::Member => "member",
+        Scope::Device => "device",
+    };
+    serde_json::from_str(&format!(
+        r#"{{"scope":"{scope}","label":"{label}","version":{version}}}"#
+    ))
+    .unwrap()
 }
