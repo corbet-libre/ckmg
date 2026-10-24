@@ -112,7 +112,7 @@ impl DeviceFormat {
             Self::PairingApproval => b"cvld.device-pairing-approval.v1\0",
             Self::AccountRequest => b"cfrm.account.request.v1\0",
             Self::AccountStatus => b"cfrm.account.status.v1\0",
-            Self::RecordRecipient => b"[\"cblc.record-recipient.v1\",",
+            Self::RecordRecipient => b"[\"cblc.record-recipient.v2\",",
             Self::AccountingDelegation => b"[\"cmsg.accounting-delegation.v1\",",
             Self::ForumChallenge => b"[\"cswb.challenge.v1\",",
             Self::ForumRequest => b"[\"cswb.request.v1\",",
