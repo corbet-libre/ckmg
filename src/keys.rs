@@ -13,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
 mod account_device;
-#[cfg(feature = "wallet-engine")]
 mod account_signing;
 mod current_signing;
 mod enrollment;
@@ -337,6 +336,9 @@ struct Metadata {
     output: Option<Receipt>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     initial: Option<inspection::StoredInitial>,
+    /// The account-signing ledger: its own binary checkpoint section, never JSON.
+    #[serde(skip)]
+    ledger: crate::signing_ledger::AccountLedger,
 }
 
 #[derive(Clone)]
@@ -714,6 +716,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.require_absent(location).await?;
         let mut material =
             Material::derive(prf, anchor.binding.community(), false, &mut self.entropy)?;
+        // A restored retained checkpoint keeps its account-signing ledger (add-only).
+        let mut ledger = crate::signing_ledger::AccountLedger::default();
         let device = vld0::public_key(&material.device);
         if !anchor.devices.contains(&device) {
             return Err(Error::Unauthorized);
@@ -760,6 +764,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                     return Err(Error::Clock);
                 }
                 material = retained;
+                ledger = metadata.ledger;
             }
             RestoreRoot::Paired(grant) => {
                 grant.lineage.verify()?;
@@ -823,7 +828,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         if vld0::public_key(material.root()?) != anchor.root {
             return Err(Error::Unauthorized);
         }
-        let candidate = self.initial(prf, location, material, info, anchor.clone(), None)?;
+        let mut candidate = self.initial(prf, location, material, info, anchor.clone(), None)?;
+        candidate.metadata.ledger = ledger;
         self.prepare(candidate, None, Some(Change::Restored(anchor.clone())))?;
         self.commit().await?.ok_or(Error::Crypto)
     }
@@ -1007,6 +1013,7 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 revoked: false,
                 output: None,
                 initial: None,
+                ledger: Default::default(),
             },
         })
     }
@@ -2019,6 +2026,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
     /// Initialize the original pure Wallet engine under fresh current custody.
     /// It retains an immutable purpose key; no root/seed/RNG callback or rekey
     /// operation is exposed. Initialization grants no accepted balance or Wave.
+    /// It restores the account key for its projection but cannot sign with it;
+    /// account signatures go only through [`Self::sign_account_digest`].
     /// Upper Wallet consumes the exact types reexported in `wallet_engine`.
     #[cfg(feature = "wallet-engine")]
     pub async fn wallet_engine(&mut self) -> Result<crate::wallet_engine::Engine, Error> {
@@ -2369,13 +2378,18 @@ fn encode_checkpoint(
     metadata: &Metadata,
     material: &Material,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
+    let ledger = &metadata.ledger;
     let metadata = Zeroizing::new(serde_json::to_vec(metadata).map_err(|_| Error::Encoding)?);
-    if metadata.len() + 101 > MAX_CHECKPOINT_BYTES - 64 {
+    if metadata.len() + ledger.encoded_len() + 101 > MAX_CHECKPOINT_BYTES - 64 {
         return Err(Error::Limit);
     }
-    let mut bytes = Zeroizing::new(Vec::with_capacity(4 + metadata.len() + 97));
+    let mut bytes =
+        Zeroizing::new(Vec::with_capacity(4 + metadata.len() + ledger.encoded_len() + 97));
     bytes.extend_from_slice(&(metadata.len() as u32).to_le_bytes());
     bytes.extend_from_slice(&metadata);
+    // The ledger section sits between metadata and material; it is absent when empty,
+    // so a checkpoint without signatures keeps its earlier exact bytes.
+    ledger.encode(&mut bytes);
     material.append(&mut bytes);
     Ok(bytes)
 }
@@ -2384,9 +2398,13 @@ fn decode_checkpoint(bytes: &[u8]) -> Result<(Metadata, Material), Error> {
     let length = bytes.get(..4).ok_or(Error::Encoding)?;
     let length = u32::from_le_bytes(length.try_into().map_err(|_| Error::Encoding)?) as usize;
     let end = 4usize.checked_add(length).ok_or(Error::Encoding)?;
-    let metadata = serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
-        .map_err(|_| Error::Encoding)?;
-    let material = Material::parse(bytes.get(end..).ok_or(Error::Encoding)?)?;
+    let mut metadata: Metadata =
+        serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
+            .map_err(|_| Error::Encoding)?;
+    let (ledger, rest) =
+        crate::signing_ledger::AccountLedger::decode(bytes.get(end..).ok_or(Error::Encoding)?)?;
+    metadata.ledger = ledger;
+    let material = Material::parse(rest)?;
     Ok((metadata, material))
 }
 

@@ -184,6 +184,10 @@ pub enum Action {
     /// Sign exactly the digest of a wave Acknowledgment, under the same rules as
     /// [`Action::SignContact`] but never interchangeable with it.
     SignAcknowledgment,
+    /// Drop one finished wave's entries from the account-signing ledger. Needs a
+    /// single-use admitted command whose statement is `forget_wave_statement(slot,
+    /// final receipt digest)`; it never signs and never forgets another wave.
+    ForgetWave,
 }
 
 /// Original owner signing bytes and exclusive deadline. Input, not authority.

@@ -78,6 +78,25 @@ impl IdentityRoots {
             .map_err(|_| Error::Encoding)
     }
 
+    /// Mint the one-shot account-key signer for exactly `digest`. Crate-private: only
+    /// `Keys::sign_account_digest` calls it, after its ledger, admission and final
+    /// recheck; the raw balance seed and sealing key never leave this type.
+    #[cfg(feature = "wallet-engine")]
+    pub(crate) fn account_signing(
+        &self,
+        digest: [u8; 32],
+    ) -> Result<cwlt_engine::account_key::AccountSigning, Error> {
+        let mut seed = Zeroizing::new(*self.balance_seed);
+        let mut key = Zeroizing::new(*self.balance_sealing_key);
+        cwlt_engine::account_key::AccountSigning::mint(
+            &mut seed,
+            &mut key,
+            self.domain.as_bytes(),
+            digest,
+        )
+        .map_err(|_| Error::Encoding)
+    }
+
     /// Public identity verification key derived from the retained common random root.
     /// Independent of the passkey wrapping it and of device/lineage rotations.
     pub fn public_key(&self) -> crate::PublicKey {

@@ -32,6 +32,7 @@ fn fixture() -> (PrfOutput, Metadata, Material) {
         revoked: false,
         output: None,
         initial: None,
+        ledger: Default::default(),
     };
     (prf, metadata, material)
 }
@@ -565,4 +566,28 @@ fn lineage_read_capability_reads_only_the_one_record_for_the_exact_binding() {
     changed[last] ^= 1;
     let wrong = LineageReadCustody::from_capability(&changed, &lineage.binding).unwrap();
     assert_ne!(&**wrong.open(&nonce, &sealed).unwrap(), b"lineage evidence");
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn the_signing_ledger_section_round_trips_and_is_absent_when_empty() {
+    use crate::SigningPhase;
+    let (_, mut metadata, material) = fixture();
+    let before = encode_checkpoint(&metadata, &material).unwrap();
+    // No section when empty: the pre-ledger bytes decode unchanged.
+    let (decoded, _) = decode_checkpoint(&before).unwrap();
+    assert!(decoded.ledger == crate::signing_ledger::AccountLedger::default());
+    metadata
+        .ledger
+        .insert([1; 32], SigningPhase::Contact, [2; 32])
+        .unwrap();
+    let after = encode_checkpoint(&metadata, &material).unwrap();
+    assert_eq!(after.len(), before.len() + 3 + 65);
+    let (decoded, reparsed) = decode_checkpoint(&after).unwrap();
+    assert!(decoded.ledger == metadata.ledger);
+    assert!(reparsed.device == material.device);
+    assert_eq!(
+        decoded.ledger.admits(&[1; 32], SigningPhase::Contact, &[3; 32]),
+        Err(Error::Unauthorized)
+    );
 }

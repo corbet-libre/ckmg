@@ -81,6 +81,7 @@ impl EnrollmentSeed {
             signature: vld0::sign(&material.device, &receipt.attestation_bytes(device)?)?,
         });
         let metadata = Metadata {
+            ledger: Default::default(),
             version: 1,
             revision: 0,
             last_time: clock.now()?,
