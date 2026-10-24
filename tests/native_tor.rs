@@ -33,17 +33,18 @@ async fn only_the_fresh_device_onion_purpose_can_construct_the_actual_engine() {
     let guard = Guard::default();
     let mut keys = machine(&store, &time, &guard, 73);
     create(&mut keys, &guard, &prf(1), &binding("garden")).await;
-    for other in [
-        wire_purpose(Scope::Member, "tor.onion"),
-        purpose(Scope::Device, "profile"),
-    ] {
-        let handle = keys.key(other).await.unwrap();
-        assert!(matches!(
-            keys.native_tor_initializer(&handle, ctrn::Scope([4; 32]))
-                .await,
-            Err(Error::InvalidPurpose)
-        ));
-    }
+    // A member `tor.onion` lies in the reserved `tor.` namespace (ckmg S1): no handle exists for it.
+    assert!(matches!(
+        keys.key(wire_purpose(Scope::Member, "tor.onion")).await,
+        Err(Error::InvalidPurpose)
+    ));
+    // An ordinary device purpose gets a handle, but never the engine.
+    let handle = keys.key(purpose(Scope::Device, "profile")).await.unwrap();
+    assert!(matches!(
+        keys.native_tor_initializer(&handle, ctrn::Scope([4; 32]))
+            .await,
+        Err(Error::InvalidPurpose)
+    ));
     let handle = keys
         .key(wire_purpose(Scope::Device, "tor.onion"))
         .await
