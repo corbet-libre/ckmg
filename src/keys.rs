@@ -17,9 +17,9 @@ mod account_device;
 mod account_signing;
 mod current_signing;
 mod enrollment;
+mod ephemeral;
 mod genesis;
 mod inspection;
-mod ephemeral;
 mod transport;
 
 enum CurrentCheck<'a> {
@@ -35,12 +35,12 @@ pub use enrollment::{
     DevicePurpose, EnrollmentSeed, UnenrolledCreation, wallet_birth_device_payload,
     wallet_birth_passport_payload,
 };
+pub use ephemeral::EphemeralTransport;
 pub use inspection::{
     CheckpointBootstrap, CheckpointInspection, CheckpointInspector, CheckpointRecordCustody,
     CompletionIntent, InitialCheckpointProvenance, InitialLineageReader, LineageReadCapability,
     LineageReadCustody, PendingCompletion, PendingCreation, ProvisionalLineage, inspect_checkpoint,
 };
-pub use ephemeral::EphemeralTransport;
 pub use transport::TransportSession;
 
 const CHECKPOINT_HEADER: &[u8] = b"ckmg.checkpoint.v1\0";
@@ -2314,7 +2314,8 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let current = self.loaded()?;
         let secret = purpose_secret(current, purpose, false)?;
         let community = current.metadata.lineage.binding.community().to_owned();
-        self.tor_custody.initializer(scope, secret, community, false)
+        self.tor_custody
+            .initializer(scope, secret, community, false)
     }
 
     /// Consume-only browser onion custody for the exact device `tor.onion`

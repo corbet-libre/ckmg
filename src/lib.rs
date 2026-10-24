@@ -56,11 +56,11 @@ pub use keys::{
     AccountDeviceAuthorization, AccountDevicePlan, Change, CheckpointBootstrap,
     CheckpointInspection, CheckpointInspector, CheckpointRecordCustody, CompletionIntent,
     DeviceAttestation, DeviceEd25519Signer, DeviceInfo, DevicePurpose, Ed25519Signer,
-    EphemeralTransport,
-    EnrollmentSeed, InitialCheckpointProvenance, InitialLineageReader, KeyHandle, Keys,
-    LineageReadCapability, LineageReadCustody, OperationId, PendingCompletion, PendingCreation,
-    ProvisionalLineage, Receipt, RestoreRoot, State, TransportSession, UnenrolledCreation,
-    Vld0Signer, inspect_checkpoint, wallet_birth_device_payload, wallet_birth_passport_payload,
+    EnrollmentSeed, EphemeralTransport, InitialCheckpointProvenance, InitialLineageReader,
+    KeyHandle, Keys, LineageReadCapability, LineageReadCustody, OperationId, PendingCompletion,
+    PendingCreation, ProvisionalLineage, Receipt, RestoreRoot, State, TransportSession,
+    UnenrolledCreation, Vld0Signer, inspect_checkpoint, wallet_birth_device_payload,
+    wallet_birth_passport_payload,
 };
 pub use lineage::{
     Binding, KeyCertificate, Lineage, PairingGrant, PairingRequest, RootEnvelope, Rotation,
