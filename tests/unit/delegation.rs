@@ -102,6 +102,11 @@ impl Authority for Allow {
         }
         Ok(())
     }
+    // Test authority: the final account-signing hook grants the fixture's clock, so a full
+    // custody signs (the positive control) while Delegated custody must never reach it.
+    fn check_account_signing_current(&mut self, _request: Authorization<'_>) -> Result<u64, Error> {
+        Ok(1000)
+    }
 }
 
 type Machine = Keys<Memory, Time, crate::SystemEntropy, Allow>;
@@ -116,6 +121,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Self {
+        Self::in_community(COMMUNITY).await
+    }
+
+    async fn in_community(community: &str) -> Self {
         let prf = PrfOutput::from_bytes(&[41; 32]).unwrap();
         let store = Memory::default();
         let time = Time(Rc::new(Cell::new(1000)));
@@ -129,7 +138,7 @@ impl Fixture {
         let receipt = keys
             .create_scope(
                 &prf,
-                Binding::new(COMMUNITY, "member").unwrap(),
+                Binding::new(community, "member").unwrap(),
                 DeviceInfo::new("fixture", b"credential").unwrap(),
                 b"registration",
             )
@@ -660,3 +669,39 @@ fn reserved_purpose(scope: Scope, label: &str, version: u32) -> Purpose {
     ))
     .unwrap()
 }
+
+#[cfg(feature = "wallet-engine")]
+shared!(delegated_custody_never_signs_an_account_digest, {
+    use crate::{SigningPhase, wallet_engine::account::verify_prehash};
+    let mut f = Fixture::in_community("wallet").await;
+    let board = member("board");
+    let (_, delegation) = f.delegate(std::slice::from_ref(&board)).await;
+    // The sealed account key is produced by the full custody's wallet engine.
+    let engine = f.keys.wallet_engine().await.unwrap();
+    let key = engine.prepare_account_key("wallet", [1; 32]).unwrap();
+    let public = key.projection(&engine).unwrap().public_key;
+    let sealed = key.seal().unwrap();
+    drop(engine);
+    // Positive control: the same call signs in full custody and the signature verifies.
+    let signature = f
+        .keys
+        .sign_account_digest(SigningPhase::Contact, [5; 32], [9; 32], &sealed, 1200)
+        .await
+        .unwrap();
+    assert!(verify_prehash(&public, &[9; 32], &signature).is_ok());
+    // Delegated custody refuses before any ledger or authority step, for every phase.
+    let mut delegated = f.delegated(&delegation).await;
+    for phase in [
+        SigningPhase::Contact,
+        SigningPhase::Resolution,
+        SigningPhase::Acknowledgment,
+    ] {
+        assert_eq!(
+            delegated
+                .sign_account_digest(phase, [6; 32], [9; 32], &sealed, 1200)
+                .await
+                .err(),
+            Some(Error::NoRoot)
+        );
+    }
+});
