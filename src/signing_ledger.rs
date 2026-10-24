@@ -266,7 +266,7 @@ impl AccountLedger {
         let end = 2 + count * ENTRY_BYTES;
         let body = rest.get(2..end).ok_or(Error::Encoding)?;
         let mut ledger = Self(Vec::with_capacity(count));
-        for chunk in body.chunks_exact(ENTRY_BYTES) {
+        for chunk in body.as_chunks::<ENTRY_BYTES>().0 {
             let slot: [u8; 32] = chunk[..32].try_into().map_err(|_| Error::Encoding)?;
             let phase = SigningPhase::from_code(chunk[32])?;
             let digest: [u8; 32] = chunk[33..].try_into().map_err(|_| Error::Encoding)?;
