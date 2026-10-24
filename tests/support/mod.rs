@@ -193,6 +193,7 @@ impl Authority for Guard {
                 Action::Use
                     | Action::UseTransport(_)
                     | Action::LendDeviceSigner
+                    | Action::LendProfileCustody
                     | Action::SignDeviceEd25519
                     | Action::Pair
                     | Action::Rotate
@@ -212,6 +213,7 @@ impl Authority for Guard {
             Action::Use
                 | Action::UseTransport(_)
                 | Action::LendDeviceSigner
+                | Action::LendProfileCustody
                 | Action::SignDeviceEd25519
         ) {
             let evidence: [u8; 64] = request
