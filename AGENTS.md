@@ -1,40 +1,18 @@
-# Agent instructions
+# ckmg — agent notes
 
-Write all code comments and documentation in English.
+Commands (repo root; work in a lane, never edit `~/agents/scratch/ws`; lane-wide checks run via `cargo xtask check/test`):
+- `bash .ci/update-our-crates.sh` first: advances internal crates to newest main; the `--locked` gates below assume it
+- `cargo fmt --all -- --check`
+- `cargo clippy --locked --all-targets -- -D warnings`
+- `cargo test --locked`
+- `cargo clippy --locked --lib --target wasm32-unknown-unknown -- -D warnings`
 
-## Product boundary
+Hard invariants (enforcing check after each):
+- Root/device secrets never cross the public API; only purpose keys are delegated; the root leaves only via `seal_root_for_device` (pairing). Enforced by `tests/unit/delegation.rs` (`delegation_bytes_hold_no_root_identity_history_ring_or_prf_material`) + `compile_fail` doctests in `src/keys/delegation.rs`.
+- VLD0 semantics hold: Ed25519ph with context `VLD0_SIGN`, typed keys `VLD0:<base64url>`. Enforced by `tests/unit/veilid_reference.rs` (`veilid_sign_hash_key_and_typed_format_conformance`).
+- Errors stay coarse and never carry keys or plaintext. Enforced by `tests/keys.rs` (`diagnostics_and_ciphertexts_omit_private_metadata`).
+- No privileged passkey: a PRF alone cannot recreate the common root; recordless `Derived` restore refuses. Enforced by `tests/keys.rs` (`a_passkey_does_not_determine_the_common_identity_root`, `restore_refuses_unavailable_wrong_prf_forged_authority_and_stale_revision`).
+- Never depend on `veilid-core`; only the VLD0 crates Veilid uses. Enforced by `python3 .github/check-first-party.py` (CI dependency policy).
 
-- Key drawer of the member vault (`cvlt`): root → device → purpose keys, VLD0 format,
-  sign / verify / seal / open, delegation, pairing (root sealed to a new device), root
-  rotation, PRF-derived wrapping/device capabilities and a retained random common
-  identity root. Every enrolled passkey has equal recovery through its own wrapped
-  copy; no passkey can recreate a lost common root from its PRF alone.
-- Invariant 5: root and device secrets never cross the public API. Only purpose keys may
-  be delegated. The only way the root leaves is `seal_root_for_device` (pairing).
-- cpky Passkeys (device) alone talks to WebAuthn; ckyh Keyhole is the server.
-  ckmg receives opaque PRF input; cwst receives only an opaque wrapping handle.
-- No recovery beyond the passkey, backup service or plaintext key export. No policy (that is `cvlt`). No network code, no I/O.
-- Never depend on `veilid-core`; use the crates Veilid's VLD0 uses and keep VLD0 semantics
-  (Ed25519ph with context `VLD0_SIGN`, typed keys `VLD0:<base64url>`).
-- Don't build security primitives: compose upstream crates.
-- LGPL-3.0-only WITH LGPL-3.0-linking-exception. Do not add code available only under the
-  full GPL or AGPL. If code is copied from Veilid (MPL-2.0), keep it in its own file under
-  MPL-2.0 with the upstream notice, as `cwst` does.
-- Errors stay coarse: never include keys or plaintext.
-
-## Layout
-
-- `src/typed.rs`: `CryptoKind`, `PublicKey`, `Signature`, `HashDigest` (VLD0 typed format).
-- `src/vld0.rs`: primitives on raw secrets (crate-private) plus public verify/seal/hash.
-- `src/purpose.rs`: `Purpose`, `Scope`; opaque capabilities and certificates live in keys/lineage.
-- `src/keyring.rs`: private material and checkpoint encryption.
-- `src/keys.rs`, `src/lineage.rs`, `src/ports.rs`: authorized custody and transactions.
-- `src/passkey.rs`: opaque PRF input, wrapping/device derivation and private
-  purpose derivation from the retained common root; no WebAuthn.
-- `docs/CONSTRUCTIONS.md`, `docs/SECURITY-REVIEW.md`: references and review gates.
-
-## Quality boundary
-
-- `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`, and
-  `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings` — all green in CI
-  (GitHub Actions). No local builds.
+Pointers: `docs/CONTRACT.md`, `docs/CONSTRUCTIONS.md`, `docs/SECURITY-REVIEW.md`; custody in `src/keys.rs`, `src/lineage.rs`, `src/passkey.rs`; types in `src/typed.rs`.
+LGPL-3.0-only WITH linking-exception; no GPL/AGPL-only code; Veilid MPL-2.0 copies stay in their own file with the upstream notice.
