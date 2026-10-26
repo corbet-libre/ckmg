@@ -60,6 +60,9 @@ pub enum DeviceFormat {
     WalletBirthDevice,
     /// The wallet device key's signature over a birth passport request (cgbl), wallet scope only.
     WalletBirthPassport,
+    /// The admin decision approval (cvld governance): the device key signs
+    /// `tag || proposal_digest`. Exact-admitted, Admitted class only.
+    AdminApproval,
 }
 
 /// The capability through which a device key signs. Each allows a fixed set of formats.
@@ -81,7 +84,7 @@ pub enum SigningClass {
 
 impl DeviceFormat {
     /// Every format, for exhaustive checks.
-    pub const ALL: [DeviceFormat; 18] = [
+    pub const ALL: [DeviceFormat; 19] = [
         Self::DeviceJoin,
         Self::DeviceSession,
         Self::GardenSession,
@@ -100,6 +103,7 @@ impl DeviceFormat {
         Self::ProfileBundle,
         Self::WalletBirthDevice,
         Self::WalletBirthPassport,
+        Self::AdminApproval,
     ];
 
     /// The exact leading bytes of every message of this format.
@@ -123,6 +127,7 @@ impl DeviceFormat {
             Self::ProfileBundle => b"cgrd:bundle:v1\0",
             Self::WalletBirthDevice => b"cvld.wallet-birth-device.v1\0",
             Self::WalletBirthPassport => b"cvld.wallet-birth-passport.v1\0",
+            Self::AdminApproval => b"cvld.admin-approval.v1\0",
         }
     }
 
@@ -145,7 +150,8 @@ impl DeviceFormat {
             | Self::ForumRequest
             | Self::GroupConsent
             | Self::Endorsement
-            | Self::ThreadInvitation => matches!(class, Admitted),
+            | Self::ThreadInvitation
+            | Self::AdminApproval => matches!(class, Admitted),
             Self::ProfilePublication | Self::ProfileBundle => matches!(class, Profile),
             // The classes whose real paths sign them: the wallet candidate before activation
             // (`UnenrolledCreation::sign_device`) and the unlocked wallet opening

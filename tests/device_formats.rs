@@ -172,6 +172,28 @@ fn account_status_is_allowed_in_the_admitted_class_only() {
     }
 }
 
+/// The admin approval format is signed only through exact admission.
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn admin_approval_is_allowed_in_the_admitted_class_only() {
+    let tag = DeviceFormat::AdminApproval.tag();
+    assert_eq!(tag, b"cvld.admin-approval.v1\0");
+    assert_eq!(
+        DeviceFormat::of(&tagged(tag)),
+        Some(DeviceFormat::AdminApproval)
+    );
+    assert!(DeviceFormat::AdminApproval.allowed(SigningClass::Admitted));
+    for class in [
+        SigningClass::Enrollment,
+        SigningClass::Opening,
+        SigningClass::Provenance,
+        SigningClass::Profile,
+        SigningClass::Delegate,
+    ] {
+        assert!(!DeviceFormat::AdminApproval.allowed(class), "{class:?}");
+    }
+}
+
 #[cfg(feature = "profile-envelope")]
 #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 #[cfg_attr(not(target_arch = "wasm32"), test)]
