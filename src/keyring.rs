@@ -86,8 +86,15 @@ impl Material {
                 let mut history = Vec::with_capacity(tail.len() / 40);
                 let mut previous = 0;
                 for entry in tail.as_chunks::<40>().0 {
-                    let epoch =
-                        u64::from_le_bytes(entry[..8].try_into().map_err(|_| Error::Encoding)?);
+                    let epoch = u64::from_le_bytes(entry[..8].try_into().map_err(|__cause| {
+                        crate::cause::emit(
+                            file!(),
+                            line!(),
+                            "Error::Encoding",
+                            Error::Encoding,
+                            &__cause,
+                        )
+                    })?);
                     if epoch <= previous {
                         return Err(Error::Encoding);
                     }
@@ -170,15 +177,21 @@ pub(crate) fn seal(
     let mut nonce = [0; 24];
     rng.fill(&mut nonce)?;
     let ciphertext = XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| Error::Crypto)?
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?
         .encrypt(
-            &XNonce::try_from(nonce.as_slice()).map_err(|_| Error::Crypto)?,
+            &XNonce::try_from(nonce.as_slice()).map_err(|__cause| {
+                crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+            })?,
             Payload {
                 msg: plaintext,
                 aad,
             },
         )
-        .map_err(|_| Error::Crypto)?;
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?;
     let mut result = Vec::with_capacity(24 + ciphertext.len());
     result.extend_from_slice(&nonce);
     result.extend_from_slice(&ciphertext);
@@ -191,16 +204,22 @@ pub(crate) fn open(key: &Secret, aad: &[u8], sealed: &[u8]) -> Result<Zeroizing<
     }
     let (nonce, ciphertext) = sealed.split_at(24);
     XChaCha20Poly1305::new_from_slice(key.as_slice())
-        .map_err(|_| Error::Crypto)?
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?
         .decrypt(
-            &XNonce::try_from(nonce).map_err(|_| Error::Open)?,
+            &XNonce::try_from(nonce).map_err(|__cause| {
+                crate::cause::emit(file!(), line!(), "Error::Open", Error::Open, &__cause)
+            })?,
             Payload {
                 msg: ciphertext,
                 aad,
             },
         )
         .map(Zeroizing::new)
-        .map_err(|_| Error::Open)
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Open", Error::Open, &__cause)
+        })
 }
 
 #[cfg(test)]

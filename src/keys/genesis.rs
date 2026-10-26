@@ -85,7 +85,15 @@ impl cdht::Signer for RootSigner<'_> {
     fn sign(&self, data: &[u8]) -> Result<[u8; 64], cdht::Error> {
         vld0::sign(self.0, data)
             .map(|signature| *signature.value())
-            .map_err(|_| cdht::Error::BadSignature)
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "cdht::Error::BadSignature",
+                    cdht::Error::BadSignature,
+                    &__cause,
+                )
+            })
     }
 }
 
@@ -110,8 +118,18 @@ pub(in crate::keys) fn sequenced_record(
     let read = inspection::lineage_secret(root, lineage)?;
     let ciphertext = crate::Vld0RecordCipher { secret: &read }.crypt(&nonce, evidence)?;
     let signer = RootSigner(root);
-    let schema = cdht::Schema::dflt(1).map_err(|_| Error::Encoding)?;
-    let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|_| Error::Crypto)?;
+    let schema = cdht::Schema::dflt(1).map_err(|__cause| {
+        crate::cause::emit(
+            file!(),
+            line!(),
+            "Error::Encoding",
+            Error::Encoding,
+            &__cause,
+        )
+    })?;
+    let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|__cause| {
+        crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+    })?;
     let value = cdht::SignedValue::sign_with_nonce(
         &descriptor.owner,
         0,
@@ -120,7 +138,9 @@ pub(in crate::keys) fn sequenced_record(
         Some(nonce),
         &signer,
     )
-    .map_err(|_| Error::Crypto)?;
+    .map_err(|__cause| {
+        crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+    })?;
     Ok((descriptor, value))
 }
 
@@ -258,8 +278,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         let mut nonce = [0; 24];
         self.entropy.fill(&mut nonce)?;
         let open = self.loaded()?;
-        let sequence =
-            u32::try_from(open.metadata.lineage.revision - 1).map_err(|_| Error::Limit)?;
+        let sequence = u32::try_from(open.metadata.lineage.revision - 1).map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+        })?;
         let (_, value) = sequenced_record(
             open.material.root()?,
             &open.metadata.lineage,

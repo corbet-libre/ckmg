@@ -35,7 +35,9 @@ impl Vld0RecordCipher<'_> {
         let mut output = Zeroizing::new(input.to_vec());
         XChaCha20::new((&**self.secret).into(), nonce.into())
             .try_apply_keystream(&mut output)
-            .map_err(|_| Error::Crypto)?;
+            .map_err(|__cause| {
+                crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+            })?;
         Ok(output)
     }
 }

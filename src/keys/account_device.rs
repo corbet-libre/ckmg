@@ -32,11 +32,27 @@ impl AccountDeviceAuthorization {
             self.issued_at,
             self.expires_at
         ]))
-        .map_err(|_| Error::Encoding)
+        .map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })
     }
     /// Original public wire bytes for the upper account owner's strict decoder.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        serde_json::to_vec(self).map_err(|_| Error::Encoding)
+        serde_json::to_vec(self).map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })
     }
 }
 
@@ -130,7 +146,15 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
         }
         let pseudonym = HEXLOWER
             .decode(lineage.binding.member().as_bytes())
-            .map_err(|_| Error::Unauthorized)?;
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Unauthorized",
+                    Error::Unauthorized,
+                    &__cause,
+                )
+            })?;
         if pseudonym.len() != 48 || HEXLOWER.encode(&pseudonym) != lineage.binding.member() {
             return Err(Error::Unauthorized);
         }

@@ -43,6 +43,8 @@ pub mod passkey;
 pub use cwlt_engine as wallet_engine;
 #[cfg(feature = "passport")]
 pub use passkey::HolderSeed;
+/// Device-side cause logging for flattened errors (development/test builds only).
+pub(crate) mod cause;
 mod node_cipher;
 mod ports;
 mod purpose;

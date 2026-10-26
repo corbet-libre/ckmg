@@ -110,11 +110,15 @@ impl SigningLedger {
         if &entry.digest != digest {
             return Err(Error::Unauthorized);
         }
-        let signature: [u8; 64] = entry
-            .signature
-            .as_slice()
-            .try_into()
-            .map_err(|_| Error::Encoding)?;
+        let signature: [u8; 64] = entry.signature.as_slice().try_into().map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         Ok(Some(StoredSignature(signature)))
     }
 
@@ -130,12 +134,28 @@ impl SigningLedger {
 
     /// Canonical bytes of the former wire form.
     pub fn to_bytes(&self) -> Result<Vec<u8>, Error> {
-        serde_json::to_vec(self).map_err(|_| Error::Encoding)
+        serde_json::to_vec(self).map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })
     }
 
     /// Strict decoding of [`Self::to_bytes`].
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
-        let ledger: Self = serde_json::from_slice(bytes).map_err(|_| Error::Encoding)?;
+        let ledger: Self = serde_json::from_slice(bytes).map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         if ledger.entries.len() > Self::MAX_ENTRIES
             || ledger.entries.iter().any(|e| e.signature.len() != 64)
         {
@@ -267,9 +287,25 @@ impl AccountLedger {
         let body = rest.get(2..end).ok_or(Error::Encoding)?;
         let mut ledger = Self(Vec::with_capacity(count));
         for chunk in body.as_chunks::<ENTRY_BYTES>().0 {
-            let slot: [u8; 32] = chunk[..32].try_into().map_err(|_| Error::Encoding)?;
+            let slot: [u8; 32] = chunk[..32].try_into().map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })?;
             let phase = SigningPhase::from_code(chunk[32])?;
-            let digest: [u8; 32] = chunk[33..].try_into().map_err(|_| Error::Encoding)?;
+            let digest: [u8; 32] = chunk[33..].try_into().map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })?;
             if ledger.0.iter().any(|e| e.slot == slot && e.phase == phase) {
                 return Err(Error::Encoding);
             }

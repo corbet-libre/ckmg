@@ -54,7 +54,9 @@ pub(in crate::keys) fn lineage_read_capability(
     ] {
         out.extend_from_slice(
             &u16::try_from(part.len())
-                .map_err(|_| Error::Limit)?
+                .map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+                })?
                 .to_be_bytes(),
         );
         out.extend_from_slice(part);
@@ -84,19 +86,35 @@ impl LineageReadCustody {
         }
         let mut parts = Vec::new();
         for _ in 0..2 {
-            let length = u16::from_be_bytes(
-                take(&mut rest, 2)?
-                    .try_into()
-                    .map_err(|_| Error::Encoding)?,
-            );
+            let length = u16::from_be_bytes(take(&mut rest, 2)?.try_into().map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })?);
             parts.push(take(&mut rest, usize::from(length))?.to_vec());
         }
-        let owner: [u8; 32] = take(&mut rest, 32)?
-            .try_into()
-            .map_err(|_| Error::Encoding)?;
-        let read: [u8; 32] = take(&mut rest, 32)?
-            .try_into()
-            .map_err(|_| Error::Encoding)?;
+        let owner: [u8; 32] = take(&mut rest, 32)?.try_into().map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
+        let read: [u8; 32] = take(&mut rest, 32)?.try_into().map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         if !rest.is_empty() {
             return Err(Error::Encoding);
         }

@@ -116,7 +116,9 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
                 .ok_or(Error::MissingCheckpoint)?,
         )?
         .account_signing(digest)?;
-        let signature = signing.sign(sealed, community).map_err(|_| Error::Crypto)?;
+        let signature = signing.sign(sealed, community).map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?;
         if held {
             // Already committed: `refresh` proved this checkpoint is the durable one.
             attempt.accepted = true;

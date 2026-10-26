@@ -119,7 +119,9 @@ impl EnrollmentSeed {
 pub(crate) const WALLET_COMMUNITY: &str = "wallet";
 
 fn length_prefixed(out: &mut Vec<u8>, field: &[u8]) -> Result<(), Error> {
-    let length = u32::try_from(field.len()).map_err(|_| Error::Limit)?;
+    let length = u32::try_from(field.len()).map_err(|__cause| {
+        crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+    })?;
     out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(field);
     Ok(())

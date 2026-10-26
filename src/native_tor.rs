@@ -80,7 +80,9 @@ impl Lease {
         }
     }
     fn bind(&self, node: &Arc<ctrn::Node>) -> Result<(), ctrn::Error> {
-        let mut held = self.0.lock().map_err(|_| closed())?;
+        let mut held = self.0.lock().map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "closed", closed(), &__cause)
+        })?;
         if held.secret.is_none() || held.node.is_some() {
             return Err(closed());
         }
@@ -105,7 +107,9 @@ impl ctrn::arti::Identity for Identity {
         }
         // Exactly Arti's maintained Ed25519 expansion, as used by ctrn. No
         // private encoding, curve conversion or onion-address derivation here.
-        let held = self.lease.0.lock().map_err(|_| closed())?;
+        let held = self.lease.0.lock().map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "closed", closed(), &__cause)
+        })?;
         let secret = held.secret.as_ref().ok_or_else(closed)?;
         let pair = ed25519::Keypair::from_bytes(secret);
         Ok(HsIdKeypair::from(ed25519::ExpandedKeypair::from(&pair)))

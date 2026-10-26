@@ -75,7 +75,15 @@ impl IdentityRoots {
         let mut seed = Zeroizing::new(*self.balance_seed);
         let mut key = Zeroizing::new(*self.balance_sealing_key);
         cwlt_engine::Engine::from_seed_and_sealing_key(&mut seed, &mut key, self.domain.as_bytes())
-            .map_err(|_| Error::Encoding)
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })
     }
 
     /// Mint the one-shot account-key signer for exactly `digest`. Crate-private: only
@@ -94,7 +102,15 @@ impl IdentityRoots {
             self.domain.as_bytes(),
             digest,
         )
-        .map_err(|_| Error::Encoding)
+        .map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })
     }
 
     /// Public identity verification key derived from the retained common random root.
@@ -281,7 +297,15 @@ pub(crate) fn with_record_recipient<T>(
     // Original AccountLedger uses SHA-256 of its authenticated community ID.
     let coordinate = Sha256::digest(community.as_bytes()).into();
     let recipient = cwlt_engine::RecordRecipient::from_seed(&mut seed, coordinate, checked_at)
-        .map_err(|_| Error::Encoding)?;
+        .map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
     Ok(consume(recipient))
 }
 
@@ -305,7 +329,15 @@ impl HolderSeed<'_> {
         let mut seed = Zeroizing::new(**self.seed);
         let mut key = Zeroizing::new(**self.sealing_key);
         cpsd::OpaqueHolder::from_seed_and_sealing_key(&mut seed, &mut key, self.wallet_context)
-            .map_err(|_| Error::Encoding)
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })
     }
 
     /// Open the original CPSD sealed holder under freshly authorized wallet custody.
@@ -317,7 +349,9 @@ impl HolderSeed<'_> {
     ) -> Result<cpsd::OpaqueHolder, Error> {
         self.into_passport_holder()?
             .restored(sealed)
-            .map_err(|_| Error::Open)
+            .map_err(|__cause| {
+                crate::cause::emit(file!(), line!(), "Error::Open", Error::Open, &__cause)
+            })
     }
 }
 
@@ -508,7 +542,15 @@ pub fn native_passkey_record(
     community: &str,
 ) -> Result<crate::NativeRecordInitializer, Error> {
     let (owner, read) = record_material(prf, community)?;
-    let schema = crate::NativeRecordSchema::dflt(1).map_err(|_| Error::Encoding)?;
+    let schema = crate::NativeRecordSchema::dflt(1).map_err(|__cause| {
+        crate::cause::emit(
+            file!(),
+            line!(),
+            "Error::Encoding",
+            Error::Encoding,
+            &__cause,
+        )
+    })?;
     Ok(crate::native_record::owner(schema, &owner, &read))
 }
 
@@ -522,7 +564,9 @@ fn expand(prf: &PrfOutput, label: &[u8], store: &str) -> Result<Zeroizing<[u8; 3
     let mut out = Zeroizing::new([0u8; 32]);
     Hkdf::<Sha256>::new(Some(HKDF_SALT), prf.0.as_slice())
         .expand(&info, out.as_mut())
-        .map_err(|_| Error::Crypto)?;
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?;
     Ok(out)
 }
 

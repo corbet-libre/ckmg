@@ -51,7 +51,15 @@ impl cdht::Signer for Signer<'_> {
     fn sign(&self, data: &[u8]) -> Result<[u8; 64], cdht::Error> {
         vld0::sign(self.0, data)
             .map(|signature| *signature.value())
-            .map_err(|_| cdht::Error::BadSignature)
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "cdht::Error::BadSignature",
+                    cdht::Error::BadSignature,
+                    &__cause,
+                )
+            })
     }
 }
 fn fixed(
@@ -70,9 +78,19 @@ fn fixed(
     {
         return Err(Error::Limit);
     }
-    let schema = cdht::Schema::dflt(subkeys).map_err(|_| Error::Encoding)?;
+    let schema = cdht::Schema::dflt(subkeys).map_err(|__cause| {
+        crate::cause::emit(
+            file!(),
+            line!(),
+            "Error::Encoding",
+            Error::Encoding,
+            &__cause,
+        )
+    })?;
     let signer = Signer(owner);
-    let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|_| Error::Crypto)?;
+    let descriptor = cdht::Descriptor::create(&schema, &signer).map_err(|__cause| {
+        crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+    })?;
     let ciphertext = crate::Vld0RecordCipher { secret: read }.crypt(&nonce, packed)?;
     let value = cdht::SignedValue::sign_with_nonce(
         &descriptor.owner,
@@ -82,6 +100,8 @@ fn fixed(
         Some(nonce),
         &signer,
     )
-    .map_err(|_| Error::Crypto)?;
+    .map_err(|__cause| {
+        crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+    })?;
     Ok((descriptor, value))
 }

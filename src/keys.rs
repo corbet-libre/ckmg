@@ -509,9 +509,17 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 self.fail_closed(State::Reconcile);
                 Err(Error::Reconcile)
             }
-            Err(_) => {
-                self.fail_closed(State::Locked);
-                Err(Error::Unavailable)
+            Err(__cause) => {
+                crate::cause::print(
+                    file!(),
+                    line!(),
+                    "self fail_closed State::Locked Err Error::Unavailable",
+                    &__cause,
+                );
+                {
+                    self.fail_closed(State::Locked);
+                    Err(Error::Unavailable)
+                }
             }
         }
     }
@@ -645,11 +653,15 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.lock();
         let location = passkey::vault_location(prf, community)?;
         let key = passkey::ring_key(prf, community)?;
-        let Some(sealed) = self
-            .store
-            .load(&location)
-            .await
-            .map_err(|_| Error::Unavailable)?
+        let Some(sealed) = self.store.load(&location).await.map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Unavailable",
+                Error::Unavailable,
+                &__cause,
+            )
+        })?
         else {
             self.state = State::MissingCheckpoint;
             return Err(Error::MissingCheckpoint);
@@ -891,9 +903,17 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
                 self.fail_closed(State::Reconcile);
                 Err(Error::Reconcile)
             }
-            Err(_) => {
-                self.fail_closed(State::Locked);
-                Err(Error::Unavailable)
+            Err(__cause) => {
+                crate::cause::print(
+                    file!(),
+                    line!(),
+                    "self fail_closed State::Locked Err Error::Unavailable",
+                    &__cause,
+                );
+                {
+                    self.fail_closed(State::Locked);
+                    Err(Error::Unavailable)
+                }
             }
         }
     }
@@ -1021,7 +1041,15 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             .store
             .load(&location)
             .await
-            .map_err(|_| Error::Unavailable)?
+            .map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Unavailable",
+                    Error::Unavailable,
+                    &__cause,
+                )
+            })?
             .is_some()
         {
             return Err(Error::RootExists);
@@ -2001,7 +2029,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             binding.member(),
             public,
         )
-        .map_err(|_| Error::Crypto)?;
+        .map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+        })?;
         let signer = ProfileSigner {
             device: &current.material.device,
             public_key: public,
@@ -2025,7 +2055,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             custody
                 .restore_legacy_store(context, wrapped, legacy.envelope_legacy_key())
                 .and_then(|key| key.wrap())
-                .map_err(|_| Error::Crypto)
+                .map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "Error::Crypto", Error::Crypto, &__cause)
+                })
         })
         .await?
     }
@@ -2213,7 +2245,9 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         self.wallet_engine()
             .await?
             .restored(sealed)
-            .map_err(|_| Error::Open)
+            .map_err(|__cause| {
+                crate::cause::emit(file!(), line!(), "Error::Open", Error::Open, &__cause)
+            })
     }
 
     /// Encrypt bounded data with current device, epoch, purpose and caller context.
@@ -2443,7 +2477,15 @@ fn encode_checkpoint(
     material: &Material,
 ) -> Result<Zeroizing<Vec<u8>>, Error> {
     let ledger = &metadata.ledger;
-    let metadata = Zeroizing::new(serde_json::to_vec(metadata).map_err(|_| Error::Encoding)?);
+    let metadata = Zeroizing::new(serde_json::to_vec(metadata).map_err(|__cause| {
+        crate::cause::emit(
+            file!(),
+            line!(),
+            "Error::Encoding",
+            Error::Encoding,
+            &__cause,
+        )
+    })?);
     if metadata.len() + ledger.encoded_len() + 101 > MAX_CHECKPOINT_BYTES - 64 {
         return Err(Error::Limit);
     }
@@ -2461,10 +2503,26 @@ fn encode_checkpoint(
 
 fn decode_checkpoint(bytes: &[u8]) -> Result<(Metadata, Material), Error> {
     let length = bytes.get(..4).ok_or(Error::Encoding)?;
-    let length = u32::from_le_bytes(length.try_into().map_err(|_| Error::Encoding)?) as usize;
+    let length = u32::from_le_bytes(length.try_into().map_err(|__cause| {
+        crate::cause::emit(
+            file!(),
+            line!(),
+            "Error::Encoding",
+            Error::Encoding,
+            &__cause,
+        )
+    })?) as usize;
     let end = 4usize.checked_add(length).ok_or(Error::Encoding)?;
     let mut metadata: Metadata = serde_json::from_slice(bytes.get(4..end).ok_or(Error::Encoding)?)
-        .map_err(|_| Error::Encoding)?;
+        .map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
     let (ledger, rest) =
         crate::signing_ledger::AccountLedger::decode(bytes.get(end..).ok_or(Error::Encoding)?)?;
     metadata.ledger = ledger;

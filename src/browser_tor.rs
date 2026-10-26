@@ -80,7 +80,9 @@ impl Lease {
         }
     }
     fn bind(&self, node: &Arc<ctrn::Node>) -> Result<(), ctrn::Error> {
-        let mut held = self.0.lock().map_err(|_| closed())?;
+        let mut held = self.0.lock().map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "closed", closed(), &__cause)
+        })?;
         if held.secret.is_none() || held.node.is_some() {
             return Err(closed());
         }
@@ -139,7 +141,9 @@ impl BrowserTorInitializer {
                 if supplied.length() != 32 || supplied.to_vec() != scope.0 {
                     return Err(js_closed());
                 }
-                let held = lease.0.lock().map_err(|_| js_closed())?;
+                let held = lease.0.lock().map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "js_closed", js_closed(), &__cause)
+                })?;
                 let secret = held.secret.as_ref().ok_or_else(js_closed)?;
                 // Copy only this purpose seed into the engine's transient JS
                 // transfer buffer, never a root or a device master secret.
@@ -147,13 +151,19 @@ impl BrowserTorInitializer {
             },
         );
         let provider = Object::new();
-        Reflect::set(&provider, &"onionKey".into(), identity.as_ref()).map_err(|_| closed())?;
+        Reflect::set(&provider, &"onionKey".into(), identity.as_ref()).map_err(|__cause| {
+            crate::cause::emit(file!(), line!(), "closed", closed(), &__cause)
+        })?;
         let wrapped =
             Closure::<dyn Fn(JsValue) -> Result<JsValue, JsValue>>::new(move |options: JsValue| {
-                Reflect::set(&options, &"identity".into(), &provider).map_err(|_| js_closed())?;
+                Reflect::set(&options, &"identity".into(), &provider).map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "js_closed", js_closed(), &__cause)
+                })?;
                 factory
                     .call1(&JsValue::UNDEFINED, &options)
-                    .map_err(|_| js_closed())
+                    .map_err(|__cause| {
+                        crate::cause::emit(file!(), line!(), "js_closed", js_closed(), &__cause)
+                    })
             });
         let network = Network {
             inner: ctrn::browser::BrowserNetwork::new(

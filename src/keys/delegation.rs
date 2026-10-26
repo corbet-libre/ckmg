@@ -130,7 +130,15 @@ impl DeviceDelegation {
     /// Plaintext form for the caller's sealed resume store only; seal it before it
     /// leaves memory. Versioned and length-checked.
     pub fn to_sealed_bytes(&self) -> Result<Zeroizing<Vec<u8>>, Error> {
-        let lineage = serde_json::to_vec(&self.lineage).map_err(|_| Error::Encoding)?;
+        let lineage = serde_json::to_vec(&self.lineage).map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         let mut out = Zeroizing::new(Vec::with_capacity(
             DELEGATION_HEADER.len() + 70 + lineage.len() + self.purposes.len() * 160,
         ));
@@ -139,20 +147,34 @@ impl DeviceDelegation {
         out.extend_from_slice(self.store.secret().as_slice());
         out.extend_from_slice(
             &u32::try_from(lineage.len())
-                .map_err(|_| Error::Limit)?
+                .map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+                })?
                 .to_le_bytes(),
         );
         out.extend_from_slice(&lineage);
         out.extend_from_slice(
             &u16::try_from(self.purposes.len())
-                .map_err(|_| Error::Limit)?
+                .map_err(|__cause| {
+                    crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+                })?
                 .to_le_bytes(),
         );
         for entry in &self.purposes {
-            let purpose = serde_json::to_vec(&entry.purpose).map_err(|_| Error::Encoding)?;
+            let purpose = serde_json::to_vec(&entry.purpose).map_err(|__cause| {
+                crate::cause::emit(
+                    file!(),
+                    line!(),
+                    "Error::Encoding",
+                    Error::Encoding,
+                    &__cause,
+                )
+            })?;
             out.extend_from_slice(
                 &u16::try_from(purpose.len())
-                    .map_err(|_| Error::Limit)?
+                    .map_err(|__cause| {
+                        crate::cause::emit(file!(), line!(), "Error::Limit", Error::Limit, &__cause)
+                    })?
                     .to_le_bytes(),
             );
             out.extend_from_slice(&purpose);
@@ -180,8 +202,15 @@ impl DeviceDelegation {
         let device = keyring::secret(input.take(32)?)?;
         let store = passkey::StoreCipher::from_secret(keyring::secret(input.take(32)?)?);
         let length = u32::from_le_bytes(input.array()?) as usize;
-        let lineage: Lineage =
-            serde_json::from_slice(input.take(length)?).map_err(|_| Error::Encoding)?;
+        let lineage: Lineage = serde_json::from_slice(input.take(length)?).map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         let count = usize::from(u16::from_le_bytes(input.array()?));
         if count > MAX_DELEGATED_PURPOSES {
             return Err(Error::Encoding);
@@ -190,7 +219,15 @@ impl DeviceDelegation {
         for _ in 0..count {
             let length = usize::from(u16::from_le_bytes(input.array()?));
             let purpose: Purpose =
-                serde_json::from_slice(input.take(length)?).map_err(|_| Error::Encoding)?;
+                serde_json::from_slice(input.take(length)?).map_err(|__cause| {
+                    crate::cause::emit(
+                        file!(),
+                        line!(),
+                        "Error::Encoding",
+                        Error::Encoding,
+                        &__cause,
+                    )
+                })?;
             purposes.push(DelegatedPurpose {
                 purpose,
                 signing: keyring::secret(input.take(32)?)?,
@@ -210,7 +247,15 @@ impl DeviceDelegation {
             store,
             purposes,
         };
-        delegation.validate().map_err(|_| Error::Encoding)?;
+        delegation.validate().map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })?;
         Ok(delegation)
     }
 
@@ -234,7 +279,15 @@ impl<'a> Reader<'a> {
         Ok(head)
     }
     fn array<const N: usize>(&mut self) -> Result<[u8; N], Error> {
-        self.take(N)?.try_into().map_err(|_| Error::Encoding)
+        self.take(N)?.try_into().map_err(|__cause| {
+            crate::cause::emit(
+                file!(),
+                line!(),
+                "Error::Encoding",
+                Error::Encoding,
+                &__cause,
+            )
+        })
     }
 }
 
