@@ -654,6 +654,150 @@ shared!(rotation_seals_nothing_to_a_delegate, {
     assert!(f.keys.lineage().await.unwrap().delegates.is_empty());
 });
 
+/// A fresh device-delegation ceremony left pending: `receipt` is the unacknowledged
+/// `DeviceDelegated` output and `before` is the revision it extends.
+async fn pending_delegation() -> (Fixture, Receipt, Lineage) {
+    let mut f = Fixture::new().await;
+    let before = f.keys.lineage().await.unwrap();
+    let (receipt, _) = f
+        .keys
+        .delegate_device(&[member("board")], CEREMONY)
+        .await
+        .unwrap();
+    assert!(matches!(receipt.change, Change::DeviceDelegated(_)));
+    (f, receipt, before)
+}
+
+/// Re-sign `previous` with `secret` after the caller mutated exactly one field.
+fn resign_previous(previous: &mut Lineage, secret: &Secret) {
+    previous.signature = vld0::sign(secret, &previous.signed_bytes().unwrap()).unwrap();
+}
+
+shared!(delegated_pending_output_prepares_the_next_sequence, {
+    let (mut f, receipt, before) = pending_delegation().await;
+    let value = f
+        .keys
+        .prepare_lineage_revision_record(&receipt, &before, b"revision-two", CEREMONY)
+        .await
+        .unwrap();
+    assert_eq!(value.seq, 1);
+    assert_eq!(value.writer, *before.root.value());
+});
+
+shared!(
+    lineage_revision_evidence_bounds_reject_empty_and_oversize,
+    {
+        let (mut f, receipt, before) = pending_delegation().await;
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &before, b"", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Limit)
+        );
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(
+                    &receipt,
+                    &before,
+                    &vec![9; cdht::MAX_SUBKEY_SIZE + 1],
+                    CEREMONY
+                )
+                .await
+                .err(),
+            Some(Error::Limit)
+        );
+        // Exactly MAX_SUBKEY_SIZE bytes pass the bound and prepare the next value.
+        let value = f
+            .keys
+            .prepare_lineage_revision_record(
+                &receipt,
+                &before,
+                &vec![9; cdht::MAX_SUBKEY_SIZE],
+                CEREMONY,
+            )
+            .await
+            .unwrap();
+        assert_eq!(value.seq, 1);
+    }
+);
+
+shared!(
+    lineage_revision_rejects_any_single_predecessor_field_mismatch,
+    {
+        let (mut f, receipt, before) = pending_delegation().await;
+        let root = f.keys.open.as_ref().unwrap().material.root.clone().unwrap();
+        // Binding only.
+        let mut binding = before.clone();
+        binding.binding = Binding::new("other", "member").unwrap();
+        resign_previous(&mut binding, &root);
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &binding, b"x", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+        // Root only, re-signed by the fresh root itself.
+        let fresh = vld0::random_secret(&mut crate::SystemEntropy).unwrap();
+        let mut root_only = before.clone();
+        root_only.root = vld0::public_key(&fresh);
+        resign_previous(&mut root_only, &fresh);
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &root_only, b"x", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+        // Epoch only.
+        let mut epoch = before.clone();
+        epoch.epoch = 2;
+        resign_previous(&mut epoch, &root);
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &epoch, b"x", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+        // Identity only.
+        let mut identity = before.clone();
+        identity.identity = Some(vld0::public_key(
+            &vld0::random_secret(&mut crate::SystemEntropy).unwrap(),
+        ));
+        resign_previous(&mut identity, &root);
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &identity, b"x", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+    }
+);
+
+shared!(
+    lineage_revision_rejects_a_predecessor_with_an_unknown_device,
+    {
+        let (mut f, receipt, before) = pending_delegation().await;
+        let root = f.keys.open.as_ref().unwrap().material.root.clone().unwrap();
+        let mut devices = before.clone();
+        devices.devices.push(vld0::public_key(
+            &vld0::random_secret(&mut crate::SystemEntropy).unwrap(),
+        ));
+        devices.devices.sort();
+        resign_previous(&mut devices, &root);
+        assert_eq!(
+            f.keys
+                .prepare_lineage_revision_record(&receipt, &devices, b"x", CEREMONY)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+    }
+);
+
 fn delegated_secret_for(f: &Fixture, purpose: &Purpose) -> Secret {
     purpose_secret(f.keys.loaded().unwrap(), purpose, false).unwrap()
 }

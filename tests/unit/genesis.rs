@@ -124,6 +124,7 @@ impl Authority for Owner {
             }
             5 => return Err(Error::Unavailable),
             7 => self.store.pause_reads.set(true),
+            10 => return Err(Error::Revoked),
             _ => (),
         }
         Ok(())
@@ -133,6 +134,11 @@ impl Authority for Owner {
         request: crate::GenesisAuthorization<'_>,
     ) -> Result<(), Error> {
         self.final_checks.set(self.final_checks.get() + 1);
+        match self.mode.get() {
+            8 => return Err(Error::Revoked),
+            9 => return Err(Error::Unavailable),
+            _ => (),
+        }
         if self.receipt.borrow().as_ref() != Some(request.receipt)
             || request.authority_reference != b"credential"
             || request.evidence != PAYLOAD
@@ -499,5 +505,238 @@ shared!(
             Some(Error::Unauthorized)
         );
         assert_eq!(keys.authority.final_checks.get(), 0);
+    }
+);
+
+/// Re-sign `lineage` with `root` and re-sign `receipt`'s attestation with the
+/// fixture device key, after the caller mutated one lineage field.
+fn resign_created(keys: &Machine, receipt: &mut Receipt, lineage: &mut Lineage, root: &Secret) {
+    lineage.signature = vld0::sign(root, &lineage.signed_bytes().unwrap()).unwrap();
+    let device = keys.loaded().unwrap().material.device.clone();
+    let author = receipt.attestation.as_ref().unwrap().device;
+    receipt.attestation.as_mut().unwrap().signature =
+        vld0::sign(&device, &receipt.attestation_bytes(author).unwrap()).unwrap();
+    let Change::Created(into) = &mut receipt.change else {
+        unreachable!()
+    };
+    *into = lineage.clone();
+}
+
+shared!(
+    exact_max_evidence_is_accepted_while_empty_and_oversize_are_limited,
+    {
+        let (_, _, receipt, _) = fixture().await;
+        let nonce = [61; 24];
+        // Exactly MAX_SUBKEY_SIZE bytes are accepted, not limited.
+        receipt
+            .initial_publication_commitment(&nonce, &vec![7; cdht::MAX_SUBKEY_SIZE], 1000, 1060)
+            .unwrap();
+        // Empty and oversize evidence are both Error::Limit, never silent acceptance
+        // or a later authority refusal.
+        for evidence in [Vec::new(), vec![7; cdht::MAX_SUBKEY_SIZE + 1]] {
+            let (mut keys, _, receipt, _) = fixture().await;
+            assert_eq!(
+                keys.prepare_genesis_record(&receipt, &evidence, 1060)
+                    .await
+                    .err(),
+                Some(Error::Limit)
+            );
+        }
+        // Exactly MAX_SUBKEY_SIZE bytes pass the bound; the fixture authority still
+        // refuses the unknown evidence, proving the bound itself did not fire.
+        let (mut keys, _, receipt, _) = fixture().await;
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, &vec![7; cdht::MAX_SUBKEY_SIZE], 1060)
+                .await
+                .err(),
+            Some(Error::Unauthorized)
+        );
+    }
+);
+
+shared!(commitment_rejects_any_single_attested_field_mismatch, {
+    // Epoch-only mismatch.
+    let (keys, _, receipt, _) = fixture().await;
+    let root = keys.loaded().unwrap().material.root().unwrap().clone();
+    let mut changed = receipt.clone();
+    let Change::Created(lineage) = changed.change.clone() else {
+        unreachable!()
+    };
+    let mut epoch = lineage.clone();
+    epoch.epoch = 2;
+    resign_created(&keys, &mut changed, &mut epoch, &root);
+    assert!(
+        changed
+            .initial_publication_commitment(&[61; 24], PAYLOAD, 1000, 1060)
+            .is_err()
+    );
+    // Revision-only mismatch.
+    let mut revision = lineage.clone();
+    revision.revision = 2;
+    resign_created(&keys, &mut changed, &mut revision, &root);
+    assert!(
+        changed
+            .initial_publication_commitment(&[61; 24], PAYLOAD, 1000, 1060)
+            .is_err()
+    );
+    // Devices-only mismatch: the author plus one fresh key.
+    let fresh = vld0::public_key(&vld0::random_secret(&mut crate::SystemEntropy).unwrap());
+    let mut devices = lineage.clone();
+    devices.devices.push(fresh);
+    devices.devices.sort();
+    resign_created(&keys, &mut changed, &mut devices, &root);
+    assert!(
+        changed
+            .initial_publication_commitment(&[61; 24], PAYLOAD, 1000, 1060)
+            .is_err()
+    );
+});
+
+shared!(
+    initial_check_binds_operation_and_stamp_before_created_shape,
+    {
+        let (keys, _, receipt, _) = fixture().await;
+        let open = keys.loaded().unwrap();
+        let initial = InitialPublication::new(receipt.operation, open.stamp);
+        assert!(initial.check(open, &receipt).is_ok());
+        // Operation mismatch alone refuses, even with a matching stamp.
+        let mut bad_op = receipt.clone();
+        bad_op.operation = OperationId([63; 32]);
+        assert_eq!(
+            initial.check(open, &bad_op).err(),
+            Some(Error::Unauthorized)
+        );
+        // Stamp mismatch alone refuses, even with a matching operation.
+        let mut bad_open = open.clone();
+        bad_open.stamp = [64; 32];
+        assert_eq!(
+            initial.check(&bad_open, &receipt).err(),
+            Some(Error::Unauthorized)
+        );
+        // A matching operation and stamp still refuse a non-Created receipt.
+        let mut bad_change = receipt.clone();
+        let Change::Created(lineage) = bad_change.change.clone() else {
+            unreachable!()
+        };
+        bad_change.change = Change::Restored(lineage);
+        assert_eq!(
+            initial.check(open, &bad_change).err(),
+            Some(Error::Unauthorized)
+        );
+    }
+);
+
+shared!(created_shape_refuses_each_condition_alone, {
+    let (keys, _, receipt, _) = fixture().await;
+    let open = keys.loaded().unwrap();
+    let (metadata, material) = (open.metadata.clone(), open.material.clone());
+    assert!(check_created(&metadata, &material, &receipt).is_ok());
+    // Revoked alone refuses, with correct output and no pairing.
+    let mut revoked = metadata.clone();
+    revoked.revoked = true;
+    assert_eq!(
+        check_created(&revoked, &material, &receipt).err(),
+        Some(Error::Unauthorized)
+    );
+    // Pairing alone refuses, with correct output and no revocation.
+    let mut pairing = metadata.clone();
+    pairing.pairing = Some(PairingRequest {
+        version: 1,
+        binding: metadata.lineage.binding.clone(),
+        root: metadata.lineage.root,
+        epoch: 1,
+        device: receipt.attestation.as_ref().unwrap().device,
+        nonce: [0; 32],
+        issued_at: 1000,
+        expires_at: 1300,
+        proof: receipt.attestation.as_ref().unwrap().signature.clone(),
+    });
+    assert_eq!(
+        check_created(&pairing, &material, &receipt).err(),
+        Some(Error::Unauthorized)
+    );
+    let root = keys.loaded().unwrap().material.root().unwrap().clone();
+    // Receipt lineage differing from the checkpoint lineage refuses, even though
+    // the attestation matches the receipt.
+    let mut changed = receipt.clone();
+    let Change::Created(lineage) = changed.change.clone() else {
+        unreachable!()
+    };
+    let mut other = lineage.clone();
+    other.binding = Binding::new("other", "fixture").unwrap();
+    resign_created(&keys, &mut changed, &mut other, &root);
+    assert_eq!(
+        check_created(&metadata, &material, &changed).err(),
+        Some(Error::Unauthorized)
+    );
+    // Devices differing from exactly the attested author refuse.
+    let fresh = vld0::public_key(&vld0::random_secret(&mut crate::SystemEntropy).unwrap());
+    let mut extra = lineage.clone();
+    extra.devices.push(fresh);
+    extra.devices.sort();
+    resign_created(&keys, &mut changed, &mut extra, &root);
+    assert_eq!(
+        check_created(&metadata, &material, &changed).err(),
+        Some(Error::Unauthorized)
+    );
+    // A device key that is not the attested author's refuses.
+    let mut other_device = material.clone();
+    other_device.device = vld0::random_secret(&mut crate::SystemEntropy).unwrap();
+    assert_eq!(
+        check_created(&metadata, &other_device, &receipt).err(),
+        Some(Error::Unauthorized)
+    );
+    // A root key that did not sign the lineage refuses.
+    let mut other_root = material.clone();
+    other_root.root = Some(vld0::random_secret(&mut crate::SystemEntropy).unwrap());
+    assert_eq!(
+        check_created(&metadata, &other_root, &receipt).err(),
+        Some(Error::Unauthorized)
+    );
+});
+
+shared!(
+    genesis_authority_outcome_is_preserved_with_exact_custody_state,
+    {
+        // A first-check Revoked is preserved and revokes custody.
+        let (mut keys, _, receipt, mode) = fixture().await;
+        mode.set(10);
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, PAYLOAD, 1060)
+                .await
+                .err(),
+            Some(Error::Revoked)
+        );
+        assert_eq!(keys.state(), State::Revoked);
+        // A first-check Unavailable locks custody without revoking it.
+        let (mut keys, _, receipt, mode) = fixture().await;
+        mode.set(5);
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, PAYLOAD, 1060)
+                .await
+                .err(),
+            Some(Error::Unavailable)
+        );
+        assert_eq!(keys.state(), State::Locked);
+        // A final-check Revoked is preserved and revokes custody.
+        let (mut keys, _, receipt, mode) = fixture().await;
+        mode.set(8);
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, PAYLOAD, 1060)
+                .await
+                .err(),
+            Some(Error::Revoked)
+        );
+        assert_eq!(keys.state(), State::Revoked);
+        // A final-check Unavailable is preserved and locks custody.
+        let (mut keys, _, receipt, mode) = fixture().await;
+        mode.set(9);
+        assert_eq!(
+            keys.prepare_genesis_record(&receipt, PAYLOAD, 1060)
+                .await
+                .err(),
+            Some(Error::Unavailable)
+        );
+        assert_eq!(keys.state(), State::Locked);
     }
 );
