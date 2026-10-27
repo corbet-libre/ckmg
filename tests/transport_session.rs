@@ -276,3 +276,19 @@ fn stable_node_key_per_prf_and_binding() {
         base
     );
 }
+
+#[cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
+#[test]
+fn native_initializer_demands_fresh_transport_authority() {
+    block_on(async {
+        let (mut session, _, authority, _) = fixture(1, "transport-session");
+        let scope = ctrn::Scope([17; 32]);
+        session.with_node(|_, _| ()).await.unwrap();
+        authority.refusal.set(Some(Error::Unauthorized));
+        assert!(matches!(
+            session.native_initializer(scope).await,
+            Err(Error::Unauthorized)
+        ));
+        assert_eq!(session.public_key().unwrap_err(), Error::Locked);
+    });
+}

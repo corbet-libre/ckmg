@@ -599,3 +599,50 @@ fn the_signing_ledger_section_round_trips_and_is_absent_when_empty() {
         Err(Error::Unauthorized)
     );
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn bootstrap_accepts_evidence_of_exactly_max_message_bytes() {
+    let (prf, metadata, material) = fixture();
+    let sealed = seal(&prf, &metadata, &material);
+    struct AcceptAll {
+        calls: usize,
+    }
+    impl Authority for AcceptAll {
+        async fn check(&mut self, _request: Authorization<'_>) -> Result<(), Error> {
+            self.calls += 1;
+            Ok(())
+        }
+    }
+    let mut authority = AcceptAll { calls: 0 };
+    let inspector = CheckpointInspector::new(&prf, COMMUNITY).unwrap();
+    let evidence = vec![0xa5; MAX_MESSAGE_BYTES];
+    let bootstrap = futures::executor::block_on(inspector.bootstrap(
+        &sealed,
+        &evidence,
+        &mut BootstrapClock(1100, 1100),
+        &mut authority,
+    ))
+    .unwrap();
+    assert_eq!(authority.calls, 1);
+    assert_eq!(bootstrap.checked_at(), 1100);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn retained_decode_reaches_header_check_at_exactly_max_checkpoint_bytes() {
+    let (prf, _, _) = fixture();
+    assert_eq!(
+        inspect_checkpoint(&prf, COMMUNITY, &vec![0u8; MAX_CHECKPOINT_BYTES]).unwrap_err(),
+        Error::Encoding
+    );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_custody_debug_names_the_type_without_secrets() {
+    let (prf, metadata, material) = fixture();
+    let custody = bootstrap(&prf, &metadata, &material);
+    let record = custody.record(None).unwrap();
+    assert_eq!(format!("{record:?}"), "CheckpointRecordCustody([redacted])");
+}

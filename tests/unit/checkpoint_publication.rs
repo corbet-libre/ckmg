@@ -162,3 +162,26 @@ fn fixed_publication_refuses_original_schema_sequence_and_payload_limits() {
         ));
     }
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn fixed_accepts_exact_schema_sequence_and_payload_bounds() {
+    let (prf, metadata, material) = fixture();
+    let custody = bootstrap(&prf, &metadata, &material);
+    let record = custody.record(None).unwrap();
+    let (descriptor, value) = record
+        .publication(0, cdht::MAX_SEQ, b"exact bounds", [40; 24])
+        .unwrap();
+    assert_eq!(value.seq, cdht::MAX_SEQ);
+    validate(&descriptor, &value, 0);
+    let exact = vec![0xab; cdht::MAX_SUBKEY_SIZE];
+    let (descriptor, value) = record.publication(31, 9, &exact, [41; 24]).unwrap();
+    validate(&descriptor, &value, 31);
+    assert_eq!(
+        record
+            .with_record(|_, cipher| cipher.crypt(&[41; 24], &value.data))
+            .unwrap()
+            .as_slice(),
+        exact.as_slice()
+    );
+}
