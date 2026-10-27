@@ -216,12 +216,18 @@ fn adjacent_labels_and_member_scope_cannot_obtain_transport_admission() {
                 assert_eq!(f.keys.state(), State::Authorized);
                 continue;
             }
+            // An ordinary label goes to the member authority, never to transport admission.
+            // Its transient outage refuses this call only: the keys stay usable.
             assert_eq!(
                 f.keys.key(purpose(scope, label)).await.unwrap_err(),
                 Error::Unavailable
             );
             assert_eq!(*f.authority.calls.borrow(), vec![Action::Use]);
-            assert_eq!(f.keys.state(), State::Locked);
+            assert_eq!(f.keys.state(), State::Authorized);
+            f.authority.member.set(true);
+            assert!(f.keys.key(purpose(scope, label)).await.is_ok());
+            assert_eq!(*f.authority.calls.borrow(), vec![Action::Use, Action::Use]);
+            assert_eq!(f.keys.state(), State::Authorized);
         }
     });
 }
@@ -273,34 +279,47 @@ fn transport_handles_never_admit_member_operations() {
                 .await
                 .unwrap();
             f.authority.calls.borrow_mut().clear();
-            let called = Cell::new(false);
-            let result = match operation {
-                0 => f.keys.sign(&handle, b"member statement").await.map(|_| ()),
-                1 => {
-                    f.keys
-                        .with_vld0_record(&handle, |_, _| called.set(true))
+            let mut outcomes = Vec::new();
+            // First with the member authority transiently unavailable, then available again.
+            for available in [false, true] {
+                f.authority.member.set(available);
+                let called = Cell::new(false);
+                let result = match operation {
+                    0 => f.keys.sign(&handle, b"member statement").await.map(|_| ()),
+                    1 => {
+                        f.keys
+                            .with_vld0_record(&handle, |_, _| called.set(true))
+                            .await
+                    }
+                    2 => f.keys.lineage().await.map(|_| ()),
+                    3 => f
+                        .keys
+                        .key(purpose(Scope::Member, "records"))
                         .await
-                }
-                2 => f.keys.lineage().await.map(|_| ()),
-                3 => f
-                    .keys
-                    .key(purpose(Scope::Member, "records"))
-                    .await
-                    .map(|_| ()),
-                _ => f.keys.with_identity(|_| called.set(true)).await,
-            };
-            assert!(!called.get());
+                        .map(|_| ()),
+                    _ => f.keys.with_identity(|_| called.set(true)).await,
+                };
+                outcomes.push((result, called.get()));
+            }
             if operation < 2 {
                 // A node handle is reserved: generic purpose APIs refuse it before any
-                // authority (X3 M2).
-                assert_eq!(result, Err(Error::InvalidPurpose));
+                // authority (X3 M2), whether or not the authority is available.
+                for (result, called) in outcomes {
+                    assert_eq!(result, Err(Error::InvalidPurpose));
+                    assert!(!called);
+                }
                 assert!(f.authority.calls.borrow().is_empty());
                 assert_eq!(f.keys.state(), State::Authorized);
                 continue;
             }
-            assert_eq!(result, Err(Error::Unavailable));
-            assert_eq!(*f.authority.calls.borrow(), vec![Action::Use]);
-            assert_eq!(f.keys.state(), State::Locked);
+            // Member operations ask the member authority (Use), never transport admission. A
+            // transient outage refuses that call only; the next call with the authority back
+            // succeeds, so the keys were never locked.
+            assert_eq!(outcomes[0], (Err(Error::Unavailable), false));
+            assert_eq!(outcomes[1].0, Ok(()));
+            assert_eq!(outcomes[1].1, operation == 4);
+            assert_eq!(*f.authority.calls.borrow(), vec![Action::Use, Action::Use]);
+            assert_eq!(f.keys.state(), State::Authorized);
         }
     });
 }
@@ -334,6 +353,23 @@ fn transport_refusal_or_live_device_removal_fences_before_callback() {
                 *f.authority.calls.borrow(),
                 vec![Action::UseTransport(NodePurpose::Vld0)]
             );
+            if expected == Error::Unavailable {
+                // A transient refusal refuses this call only: the keys stay usable and the
+                // next admission, with the authority back, reaches the callback.
+                assert_eq!(f.keys.state(), State::Authorized);
+                f.authority.refusal.set(None);
+                assert_eq!(
+                    f.keys
+                        .with_vld0_node(&handle, |_, _| called.set(true))
+                        .await,
+                    Ok(())
+                );
+                assert!(called.get());
+                assert_eq!(f.authority.calls.borrow().len(), 2);
+                continue;
+            }
+            // A genuine denial or a live device removal locks (or revokes) and stays so: the
+            // next call is refused without asking any authority.
             assert_eq!(
                 f.keys.state(),
                 if expected == Error::Revoked {
