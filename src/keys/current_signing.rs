@@ -43,8 +43,11 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
         transcript: &[u8],
         expires: u64,
     ) -> Result<[u8; 64], Error> {
-        format.admit(crate::SigningClass::Admitted, None, transcript)?;
-        self.writable()?;
+        format
+            .admit(crate::SigningClass::Admitted, None, transcript)
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
+        self.writable()
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
         let mut attempt = Attempt {
             keys: self,
             accepted: false,
@@ -65,11 +68,23 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
             )
             .await?;
         attempt.keys.refresh().await?;
-        let now = attempt.keys.now()?;
+        let now = attempt
+            .keys
+            .now()
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
         if now >= expires {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "sign_device_current refusal",
+                &Error::Expired,
+            );
             return Err(Error::Expired);
         }
-        let current = attempt.keys.loaded()?;
+        let current = attempt
+            .keys
+            .loaded()
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
         let lineage = current.metadata.lineage.clone();
         let device = vld0::public_key(&current.material.device);
         let floor = attempt
@@ -86,22 +101,44 @@ impl<S: SecureStore, C: Clock, E: Entropy, A: Authority> Keys<S, C, E, A> {
                 signing: Some(signing),
                 now,
                 evidence: &[],
-            })?;
-        let completed = attempt.keys.now()?;
+            })
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
+        let completed = attempt
+            .keys
+            .now()
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
         if completed < now.max(floor) {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "sign_device_current refusal",
+                &Error::Clock,
+            );
             return Err(Error::Clock);
         }
         if completed >= expires {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "sign_device_current refusal",
+                &Error::Expired,
+            );
             return Err(Error::Expired);
         }
-        let secret = &attempt.keys.loaded()?.material.device;
+        let secret = &attempt
+            .keys
+            .loaded()
+            .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?
+            .material
+            .device;
         let signature = crate::format::sign(
             secret,
             format,
             crate::SigningClass::Admitted,
             None,
             transcript,
-        )?;
+        )
+        .inspect_err(|__e| crate::cause::print(file!(), line!(), "sign_device_current", __e))?;
         attempt.accepted = true;
         Ok(signature)
     }

@@ -562,18 +562,40 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
         route: CurrentCheck<'_>,
     ) -> Result<(), Error> {
         if evidence.len() > 4096 {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "authorize_with_check refusal",
+                &Error::Limit,
+            );
             return Err(Error::Limit);
         }
         self.refresh().await?;
-        let now = self.now()?;
-        let current = self.loaded()?;
+        let now = self.now().inspect_err(|__e| {
+            crate::cause::print(file!(), line!(), "authorize_with_check", __e)
+        })?;
+        let current = self.loaded().inspect_err(|__e| {
+            crate::cause::print(file!(), line!(), "authorize_with_check", __e)
+        })?;
         if current.metadata.revoked {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "authorize_with_check refusal",
+                &Error::Revoked,
+            );
             return Err(Error::Revoked);
         }
         if action != Action::Adopt
             && action != Action::RequestPairing
             && current.metadata.pairing.is_some()
         {
+            crate::cause::print(
+                file!(),
+                line!(),
+                "authorize_with_check refusal",
+                &Error::Unauthorized,
+            );
             return Err(Error::Unauthorized);
         }
         let binding = current.metadata.lineage.binding.clone();
