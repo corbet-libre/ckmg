@@ -508,18 +508,19 @@ shared!(
     }
 );
 
-/// Re-sign `lineage` with `root` and re-sign `receipt`'s attestation with the
-/// fixture device key, after the caller mutated one lineage field.
+/// Install the caller-mutated `lineage` (re-signed with `root`) into `receipt`
+/// and re-sign the attestation over the updated bytes, so the receipt verifies
+/// as a whole and reaches the shape check under test.
 fn resign_created(keys: &Machine, receipt: &mut Receipt, lineage: &mut Lineage, root: &Secret) {
     lineage.signature = vld0::sign(root, &lineage.signed_bytes().unwrap()).unwrap();
-    let device = keys.loaded().unwrap().material.device.clone();
-    let author = receipt.attestation.as_ref().unwrap().device;
-    receipt.attestation.as_mut().unwrap().signature =
-        vld0::sign(&device, &receipt.attestation_bytes(author).unwrap()).unwrap();
     let Change::Created(into) = &mut receipt.change else {
         unreachable!()
     };
     *into = lineage.clone();
+    let device = keys.loaded().unwrap().material.device.clone();
+    let author = receipt.attestation.as_ref().unwrap().device;
+    receipt.attestation.as_mut().unwrap().signature =
+        vld0::sign(&device, &receipt.attestation_bytes(author).unwrap()).unwrap();
 }
 
 shared!(
@@ -665,18 +666,27 @@ shared!(created_shape_refuses_each_condition_alone, {
     let mut other = lineage.clone();
     other.binding = Binding::new("other", "fixture").unwrap();
     resign_created(&keys, &mut changed, &mut other, &root);
+    // The pending output is the mutated receipt itself, so the check reaches the
+    // lineage comparison instead of refusing on output identity.
+    let mut output = metadata.clone();
+    output.output = Some(changed.clone());
     assert_eq!(
-        check_created(&metadata, &material, &changed).err(),
+        check_created(&output, &material, &changed).err(),
         Some(Error::Unauthorized)
     );
-    // Devices differing from exactly the attested author refuse.
+    // Devices differing from exactly the attested author refuse. The checkpoint
+    // carries the same device list, isolating the devices comparison.
     let fresh = vld0::public_key(&vld0::random_secret(&mut crate::SystemEntropy).unwrap());
+    let mut changed = receipt.clone();
     let mut extra = lineage.clone();
     extra.devices.push(fresh);
     extra.devices.sort();
     resign_created(&keys, &mut changed, &mut extra, &root);
+    let mut devices = metadata.clone();
+    devices.lineage = extra.clone();
+    devices.output = Some(changed.clone());
     assert_eq!(
-        check_created(&metadata, &material, &changed).err(),
+        check_created(&devices, &material, &changed).err(),
         Some(Error::Unauthorized)
     );
     // A device key that is not the attested author's refuses.
