@@ -417,3 +417,467 @@ shared!(
         assert_eq!(keys.loaded().unwrap().metadata.version, 1);
     }
 );
+
+shared!(provenance_binds_exact_seed_publication_and_bytes, {
+    let (_, prf, sealed, mut time) = fixture().await;
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    let provenance = completion.initial_acknowledgment().unwrap();
+    let receipt = completion.receipt().clone();
+    // The seed is the exact enrollment commitment, never a constant.
+    let (lineage, _) = receipt.attested_lineage().unwrap();
+    let expected_seed = crate::keys::enrollment::commitment(
+        &lineage.binding,
+        &completion.source.root,
+        receipt.operation,
+    )
+    .unwrap();
+    assert_eq!(provenance.seed(), expected_seed);
+    assert_ne!(provenance.seed(), [0; 32]);
+    assert_ne!(provenance.seed(), [1; 32]);
+    // The publication is the exact initial-publication commitment, never a constant.
+    let intent = intent();
+    let expected_publication = receipt
+        .initial_publication_commitment(
+            &intent.nonce,
+            &intent.packed_evidence,
+            intent.prepared_at,
+            intent.expires,
+        )
+        .unwrap();
+    assert_eq!(provenance.publication(), expected_publication);
+    assert_ne!(provenance.publication(), [0; 32]);
+    assert_ne!(provenance.publication(), [1; 32]);
+    // The canonical bytes are nonempty real facts, never a constant.
+    let bytes = provenance.to_bytes().unwrap();
+    assert!(bytes.len() > 1);
+    assert_ne!(bytes, vec![0u8]);
+    assert_ne!(bytes, vec![1u8]);
+});
+
+shared!(
+    stored_initial_validate_refuses_a_single_metadata_version_mismatch,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let store = keys.store.clone();
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        drop(keys);
+        let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+        keys.unlock(&prf, COMMUNITY).await.unwrap();
+        keys.acknowledge_initial(&mut completion).await.unwrap();
+        let open = keys.loaded().unwrap().clone();
+        let stored = open.metadata.initial.clone().unwrap();
+        // Only the metadata version differs; every other validated fact is exact.
+        let mut bad = open.metadata.clone();
+        bad.version = 1;
+        assert_eq!(
+            stored.validate(&bad, &open.material),
+            Err(Error::Unauthorized)
+        );
+        // Sanity: the exact acknowledged metadata validates.
+        assert!(stored.validate(&open.metadata, &open.material).is_ok());
+    }
+);
+
+shared!(
+    initial_acknowledgment_refuses_a_resigned_lineage_with_an_added_delegate,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let store = keys.store.clone();
+        let inspector = CheckpointInspector::new(&prf, COMMUNITY).unwrap();
+        let pending = inspector.pending_creation(&sealed).unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let receipt = completion.receipt().clone();
+        drop(keys);
+        let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+        keys.unlock(&prf, COMMUNITY).await.unwrap();
+        keys.acknowledge_initial(&mut completion).await.unwrap();
+        let open = keys.loaded().unwrap().clone();
+        // Re-sign the acknowledged lineage with one added delegate: receipt,
+        // author, digest and publication still match, but the lineage does not.
+        let delegate =
+            passkey::device_public_key(&PrfOutput::from_bytes(&[9; 32]).unwrap(), COMMUNITY)
+                .unwrap();
+        let mut bad = open.metadata.clone();
+        bad.lineage.delegates.push(delegate);
+        bad.lineage.signature = vld0::sign(
+            open.material.root().unwrap(),
+            &bad.lineage.signed_bytes().unwrap(),
+        )
+        .unwrap();
+        let resealed = reseal(&prf, &bad, &open.material);
+        assert_eq!(
+            inspector
+                .initial_acknowledgment(&resealed, &receipt, PAYLOAD)
+                .unwrap_err(),
+            Error::Unauthorized
+        );
+    }
+);
+
+shared!(bind_acknowledgment_enforces_the_exact_clock_floor, {
+    for (now, succeeds) in [(1000u64, true), (999u64, false)] {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let current = keys.loaded().unwrap().clone();
+        // Only the clock differs: 999 precedes the checked completion floor.
+        if succeeds {
+            assert!(completion.bind_acknowledgment(&current, now).is_ok());
+        } else {
+            assert!(matches!(
+                completion.bind_acknowledgment(&current, now),
+                Err(Error::Unauthorized)
+            ));
+        }
+    }
+});
+
+shared!(
+    acknowledgment_guard_finish_refuses_a_completion_before_its_floor,
+    {
+        let (_, prf, sealed, mut time) = fixture().await;
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let guard = completion.acknowledgment_guard();
+        assert_eq!(
+            guard.finish(&mut time, &mut owner, 1001).unwrap_err(),
+            Error::Clock
+        );
+    }
+);
+
+shared!(
+    acknowledgment_guard_finish_accepts_a_completion_at_or_after_its_floor,
+    {
+        let (_, prf, sealed, mut time) = fixture().await;
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let guard = completion.acknowledgment_guard();
+        assert_eq!(guard.finish(&mut time, &mut owner, 999).unwrap(), 1000);
+    }
+);
+
+shared!(
+    initial_acknowledgment_enforces_packed_evidence_bounds_before_receipt_checks,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let store = keys.store.clone();
+        let inspector = CheckpointInspector::new(&prf, COMMUNITY).unwrap();
+        let pending = inspector.pending_creation(&sealed).unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let receipt = completion.receipt().clone();
+        drop(keys);
+        let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+        keys.unlock(&prf, COMMUNITY).await.unwrap();
+        keys.acknowledge_initial(&mut completion).await.unwrap();
+        let acknowledged = store
+            .0
+            .borrow()
+            .get(&passkey::vault_location(&prf, COMMUNITY).unwrap())
+            .unwrap()
+            .clone();
+        // Empty evidence is refused as Limit, not as a receipt mismatch.
+        assert_eq!(
+            inspector
+                .initial_acknowledgment(&acknowledged, &receipt, &[])
+                .unwrap_err(),
+            Error::Limit
+        );
+        // Oversized evidence is refused as Limit.
+        let oversized = vec![0u8; cdht::MAX_SUBKEY_SIZE + 1];
+        assert_eq!(
+            inspector
+                .initial_acknowledgment(&acknowledged, &receipt, &oversized)
+                .unwrap_err(),
+            Error::Limit
+        );
+        // Boundary-size evidence passes the length gate and fails on the digest.
+        let boundary = vec![0u8; cdht::MAX_SUBKEY_SIZE];
+        assert_eq!(
+            inspector
+                .initial_acknowledgment(&acknowledged, &receipt, &boundary)
+                .unwrap_err(),
+            Error::Unauthorized
+        );
+    }
+);
+
+shared!(stored_initial_validate_refuses_a_single_output_mismatch, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let store = keys.store.clone();
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    let receipt = completion.receipt().clone();
+    drop(keys);
+    let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+    keys.unlock(&prf, COMMUNITY).await.unwrap();
+    keys.acknowledge_initial(&mut completion).await.unwrap();
+    let open = keys.loaded().unwrap().clone();
+    let stored = open.metadata.initial.clone().unwrap();
+    // Only the output differs; every other validated fact is exact.
+    let mut bad = open.metadata.clone();
+    bad.output = Some(receipt);
+    assert_eq!(
+        stored.validate(&bad, &open.material),
+        Err(Error::Unauthorized)
+    );
+});
+
+shared!(stored_initial_validate_refuses_a_revoked_checkpoint, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let store = keys.store.clone();
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    drop(keys);
+    let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+    keys.unlock(&prf, COMMUNITY).await.unwrap();
+    keys.acknowledge_initial(&mut completion).await.unwrap();
+    let open = keys.loaded().unwrap().clone();
+    let stored = open.metadata.initial.clone().unwrap();
+    // Only the revocation flag differs; every other validated fact is exact.
+    let mut bad = open.metadata.clone();
+    bad.revoked = true;
+    assert_eq!(
+        stored.validate(&bad, &open.material),
+        Err(Error::Unauthorized)
+    );
+});
+
+shared!(
+    stored_initial_validate_refuses_a_single_lineage_revision_mismatch,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let store = keys.store.clone();
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        drop(keys);
+        let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+        keys.unlock(&prf, COMMUNITY).await.unwrap();
+        keys.acknowledge_initial(&mut completion).await.unwrap();
+        let open = keys.loaded().unwrap().clone();
+        let stored = open.metadata.initial.clone().unwrap();
+        // Only the lineage revision differs; every other validated fact is exact.
+        let mut bad = open.metadata.clone();
+        bad.lineage.revision = 2;
+        assert_eq!(
+            stored.validate(&bad, &open.material),
+            Err(Error::Unauthorized)
+        );
+    }
+);
+
+shared!(
+    stored_initial_validate_refuses_a_nonempty_material_history,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let store = keys.store.clone();
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        drop(keys);
+        let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+        keys.unlock(&prf, COMMUNITY).await.unwrap();
+        keys.acknowledge_initial(&mut completion).await.unwrap();
+        let open = keys.loaded().unwrap().clone();
+        let stored = open.metadata.initial.clone().unwrap();
+        // Only the material history differs; every other validated fact is exact.
+        let mut material = open.material.clone();
+        material
+            .history
+            .push((2, vld0::random_secret(&mut crate::SystemEntropy).unwrap()));
+        assert_eq!(
+            stored.validate(&open.metadata, &material),
+            Err(Error::Unauthorized)
+        );
+    }
+);
+
+shared!(stored_initial_validate_refuses_a_stale_last_time, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let store = keys.store.clone();
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    drop(keys);
+    let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+    keys.unlock(&prf, COMMUNITY).await.unwrap();
+    keys.acknowledge_initial(&mut completion).await.unwrap();
+    let open = keys.loaded().unwrap().clone();
+    let stored = open.metadata.initial.clone().unwrap();
+    // Only the clock floor differs; every other validated fact is exact.
+    let mut bad = open.metadata.clone();
+    bad.last_time = 999;
+    assert_eq!(
+        stored.validate(&bad, &open.material),
+        Err(Error::Unauthorized)
+    );
+});
+
+shared!(stored_initial_validate_refuses_a_foreign_lineage_binding, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let store = keys.store.clone();
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    drop(keys);
+    let mut keys = Keys::new(store.clone(), time.clone(), crate::SystemEntropy, owner);
+    keys.unlock(&prf, COMMUNITY).await.unwrap();
+    keys.acknowledge_initial(&mut completion).await.unwrap();
+    let open = keys.loaded().unwrap().clone();
+    let stored = open.metadata.initial.clone().unwrap();
+    // Only the lineage binding differs, so only the seed check fails.
+    let mut bad = open.metadata.clone();
+    bad.lineage.binding = Binding::new(COMMUNITY, "other-member").unwrap();
+    assert_eq!(
+        stored.validate(&bad, &open.material),
+        Err(Error::Unauthorized)
+    );
+});
+
+shared!(bind_acknowledgment_refuses_a_relocated_checkpoint, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    let mut current = keys.loaded().unwrap().clone();
+    // Only the store location differs; clock, stamp and custody are exact.
+    current.location =
+        passkey::vault_location(&PrfOutput::from_bytes(&[9; 32]).unwrap(), COMMUNITY).unwrap();
+    assert!(matches!(
+        completion.bind_acknowledgment(&current, 1000),
+        Err(Error::Unauthorized)
+    ));
+});
+
+shared!(
+    bind_acknowledgment_refuses_a_substituted_authority_reference,
+    {
+        let (keys, prf, sealed, mut time) = fixture().await;
+        let pending = CheckpointInspector::new(&prf, COMMUNITY)
+            .unwrap()
+            .pending_creation(&sealed)
+            .unwrap();
+        let mut owner = CompletionOwner::new(&pending, time.clone());
+        let mut completion = pending
+            .authorize_completion(intent(), &mut time, &mut owner)
+            .await
+            .unwrap();
+        let mut current = keys.loaded().unwrap().clone();
+        // Only the authority reference differs; clock, stamp and store are exact.
+        current.metadata.info = DeviceInfo::new("fixture", b"other credential").unwrap();
+        assert!(matches!(
+            completion.bind_acknowledgment(&current, 1000),
+            Err(Error::Unauthorized)
+        ));
+    }
+);
+
+shared!(bind_acknowledgment_refuses_a_nonpending_revision, {
+    let (keys, prf, sealed, mut time) = fixture().await;
+    let pending = CheckpointInspector::new(&prf, COMMUNITY)
+        .unwrap()
+        .pending_creation(&sealed)
+        .unwrap();
+    let mut owner = CompletionOwner::new(&pending, time.clone());
+    let mut completion = pending
+        .authorize_completion(intent(), &mut time, &mut owner)
+        .await
+        .unwrap();
+    let mut current = keys.loaded().unwrap().clone();
+    // Only the revision differs; clock, stamp and custody are exact.
+    current.metadata.revision = 2;
+    assert!(matches!(
+        completion.bind_acknowledgment(&current, 1000),
+        Err(Error::Unauthorized)
+    ));
+});
