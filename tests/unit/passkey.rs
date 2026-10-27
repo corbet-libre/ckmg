@@ -154,3 +154,264 @@ fn legacy_purpose_vectors_remain_stable_and_separate_domains() {
         assert!(vault_location(&prf, domain).is_err());
     }
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn proof_transcript_enforces_the_4096_byte_bound() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let roots = identity_roots(&prf, "a").unwrap();
+    let max = vec![0u8; 4096];
+    let transcript = roots.proof_transcript(&max).unwrap();
+    let signature = roots.prove_possession(&max).unwrap();
+    crate::verify(&roots.public_key(), &transcript, &signature).unwrap();
+    assert!(matches!(
+        roots.proof_transcript(&vec![0u8; 4097]),
+        Err(Error::Limit)
+    ));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn store_cipher_seal_enforces_both_bounds_at_exact_limits() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let cipher = store_cipher(&prf, "a").unwrap();
+    assert!(matches!(
+        cipher.seal(&mut crate::SystemEntropy, &vec![0u8; 4097], b"x"),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        cipher.seal(
+            &mut crate::SystemEntropy,
+            b"context",
+            &vec![0u8; crate::MAX_MESSAGE_BYTES + 1]
+        ),
+        Err(Error::Limit)
+    ));
+    let context = vec![9u8; 4096];
+    let sealed = cipher
+        .seal(&mut crate::SystemEntropy, &context, b"exact")
+        .unwrap();
+    assert_eq!(
+        cipher.open(&context, &sealed).unwrap().as_slice(),
+        b"exact".as_slice()
+    );
+    let plaintext = vec![7u8; crate::MAX_MESSAGE_BYTES];
+    let big = cipher
+        .seal(&mut crate::SystemEntropy, b"c", &plaintext)
+        .unwrap();
+    assert_eq!(
+        cipher.open(b"c", &big).unwrap().as_slice(),
+        plaintext.as_slice()
+    );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn store_cipher_open_enforces_both_bounds_at_exact_limits() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let cipher = store_cipher(&prf, "a").unwrap();
+    assert!(matches!(
+        cipher.open(&vec![0u8; 4097], &vec![0u8; 50]),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        cipher.open(b"context", &vec![0u8; crate::MAX_MESSAGE_BYTES + 41]),
+        Err(Error::Limit)
+    ));
+    assert!(matches!(
+        cipher.open(b"context", &vec![0u8; crate::MAX_MESSAGE_BYTES + 40]),
+        Err(Error::Open)
+    ));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_custody_debug_stays_redacted() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    assert_eq!(
+        format!("{:?}", passkey_record_reader(&prf, "a").unwrap()),
+        "PasskeyRecordReader([redacted])"
+    );
+    assert_eq!(
+        format!("{:?}", passkey_record_writer(&prf, "a").unwrap()),
+        "PasskeyRecordWriter([redacted])"
+    );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_material_matches_reader_writer_and_separates_communities() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let (owner, read) = record_material(&prf, "a").unwrap();
+    assert_eq!(
+        owner,
+        expand(&prf, b"passkey-record-owner-v1\0", "a").unwrap()
+    );
+    assert_eq!(
+        read,
+        expand(&prf, b"passkey-record-read-v1\0", "a").unwrap()
+    );
+    assert_ne!(owner, read);
+    assert_ne!(*owner, [0; 32]);
+    assert_ne!(*read, [0; 32]);
+    let reader = passkey_record_reader(&prf, "a").unwrap();
+    assert_eq!(reader.owner(), crate::vld0::public_key(&owner));
+    assert_eq!(
+        passkey_record_writer(&prf, "a").unwrap().owner(),
+        reader.owner()
+    );
+    assert_ne!(record_material(&prf, "b").unwrap().0, owner);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn vault_location_enforces_the_256_byte_community_bound() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    assert!(vault_location(&prf, &"a".repeat(256)).is_ok());
+    assert!(vault_location(&prf, &"a".repeat(257)).is_err());
+}
+
+#[cfg(feature = "profile-envelope")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn profile_storage_key_is_label_bound_and_separates_communities() {
+    let common: Secret = Zeroizing::new([27u8; 32]);
+    let key = profile_storage_key(&common, "a").unwrap();
+    assert_eq!(
+        key,
+        expand(
+            &PrfOutput(common.clone()),
+            b"ckmg.profile-envelope-storage.v2\0",
+            "a"
+        )
+        .unwrap()
+    );
+    assert_ne!(*key, [0; 32]);
+    assert_ne!(profile_storage_key(&common, "b").unwrap(), key);
+    assert!(profile_storage_key(&common, "").is_err());
+}
+
+#[cfg(feature = "profile-envelope")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn envelope_legacy_key_is_the_live_cipher_secret() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let cipher = store_cipher(&prf, "a").unwrap();
+    let live: [u8; 32] = **cipher.secret();
+    assert_eq!(*cipher.envelope_legacy_key(), live);
+    assert_ne!(*cipher.envelope_legacy_key(), [0; 32]);
+    assert_ne!(*cipher.envelope_legacy_key(), [1; 32]);
+    assert_ne!(
+        store_cipher(&prf, "b").unwrap().envelope_legacy_key(),
+        cipher.envelope_legacy_key()
+    );
+}
+
+#[cfg(feature = "wallet-engine")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn record_recipient_is_deterministic_and_separates_communities() {
+    let common: Secret = Zeroizing::new([27u8; 32]);
+    let first =
+        with_record_recipient(&common, "a", 1000, |recipient| recipient.public_key()).unwrap();
+    let second =
+        with_record_recipient(&common, "a", 1000, |recipient| recipient.public_key()).unwrap();
+    assert_eq!(first, second);
+    assert_ne!(first, [0; 32]);
+    let other =
+        with_record_recipient(&common, "b", 1000, |recipient| recipient.public_key()).unwrap();
+    assert_ne!(first, other);
+}
+
+#[cfg(feature = "wallet-engine")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn wallet_engine_restores_only_under_its_own_domain() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let engine = identity_roots(&prf, "a").unwrap().wallet_engine().unwrap();
+    let sealed = engine.seal().unwrap();
+    assert!(engine.restored(&sealed).is_ok());
+    let foreign = identity_roots(&prf, "b").unwrap().wallet_engine().unwrap();
+    assert!(foreign.restored(&sealed).is_err());
+}
+
+#[cfg(feature = "wallet-engine")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn account_signing_binds_exact_digest_and_scope() {
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let roots = identity_roots(&prf, "a").unwrap();
+    let engine = roots.wallet_engine().unwrap();
+    let sealed = engine
+        .prepare_account_key("a", [5; 32])
+        .unwrap()
+        .seal()
+        .unwrap();
+    let digest = [9; 32];
+    let first = roots
+        .account_signing(digest)
+        .unwrap()
+        .sign(&sealed, "a")
+        .unwrap();
+    let second = roots
+        .account_signing(digest)
+        .unwrap()
+        .sign(&sealed, "a")
+        .unwrap();
+    assert_eq!(first, second);
+    let other = roots
+        .account_signing([10; 32])
+        .unwrap()
+        .sign(&sealed, "a")
+        .unwrap();
+    assert_ne!(first, other);
+    assert!(
+        roots
+            .account_signing(digest)
+            .unwrap()
+            .sign(&sealed, "b")
+            .is_err()
+    );
+}
+
+#[cfg(feature = "passport")]
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn holder_seed_rebuilds_the_same_holder_per_domain() {
+    use cpsd::rand::{SeedableRng, rngs::StdRng};
+    let prf = PrfOutput::from_bytes(&[27; 32]).unwrap();
+    let community = cpsd::CommunityId::new(b"community-a").unwrap();
+    let holder = identity_roots(&prf, "a")
+        .unwrap()
+        .holder_seed()
+        .into_passport_holder()
+        .unwrap();
+    let expected = holder.pseudonym(&community);
+    let rebuilt = identity_roots(&prf, "a")
+        .unwrap()
+        .holder_seed()
+        .into_passport_holder()
+        .unwrap();
+    assert_eq!(rebuilt.pseudonym(&community), expected);
+    let foreign = identity_roots(&prf, "b")
+        .unwrap()
+        .holder_seed()
+        .into_passport_holder()
+        .unwrap();
+    assert_ne!(foreign.pseudonym(&community), expected);
+    let mut rng = StdRng::seed_from_u64(1);
+    let sealed = holder.seal(&mut rng).unwrap();
+    let opened = identity_roots(&prf, "a")
+        .unwrap()
+        .holder_seed()
+        .open_passport_holder(&sealed)
+        .unwrap();
+    assert_eq!(opened.pseudonym(&community), expected);
+    assert!(
+        identity_roots(&prf, "b")
+            .unwrap()
+            .holder_seed()
+            .open_passport_holder(&sealed)
+            .is_err()
+    );
+}
