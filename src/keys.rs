@@ -632,11 +632,16 @@ impl<S: SecureStore, C: Clock, R: Entropy, A: Authority> Keys<S, C, R, A> {
             CurrentCheck::AccountSigning => self.authority.check_account_signing(request).await,
         };
         if let Err(error) = result {
-            self.fail_closed(if error == Error::Revoked {
-                State::Revoked
-            } else {
-                State::Locked
-            });
+            // Decided 2026-10-27: a transient outcome ("could not check") refuses this
+            // call only; the keys stay usable and a later call checks again. Every
+            // genuine denial locks, and that lock stays.
+            if error != Error::Unavailable {
+                self.fail_closed(if error == Error::Revoked {
+                    State::Revoked
+                } else {
+                    State::Locked
+                });
+            }
             return Err(match error {
                 Error::Unavailable => Error::Unavailable,
                 Error::Revoked => Error::Revoked,
