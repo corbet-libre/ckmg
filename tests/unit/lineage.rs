@@ -54,3 +54,473 @@ fn historical_lineage_keeps_its_original_domain_and_serialized_fields() {
     lineage.identity = None;
     assert!(lineage.signed_bytes().is_err());
 }
+
+// ---- focused shape/transcript tests: each surviving mutant in src/lineage.rs
+// must make at least one of these fail. Key seeds use distinct high bits in
+// byte 0 because ed25519 clamping clears the low three bits, so tags must
+// differ above bit 2 to stay distinct keys.
+
+fn seed_key(first: u8, second: u8) -> PublicKey {
+    let mut bytes = [0u8; 32];
+    bytes[0] = first;
+    bytes[1] = second;
+    bytes[2] = 0x5A;
+    let secret = crate::keyring::secret(&bytes).unwrap();
+    vld0::public_key(&secret)
+}
+
+fn sign_as(first: u8, second: u8, data: &[u8]) -> Signature {
+    let mut bytes = [0u8; 32];
+    bytes[0] = first;
+    bytes[1] = second;
+    bytes[2] = 0x5A;
+    let secret = crate::keyring::secret(&bytes).unwrap();
+    vld0::sign(&secret, data).unwrap()
+}
+
+fn sorted_keys(tag: u8, count: usize) -> Vec<PublicKey> {
+    let mut keys: Vec<PublicKey> = (0..count).map(|i| seed_key(tag, i as u8)).collect();
+    keys.sort();
+    keys.dedup();
+    assert_eq!(keys.len(), count);
+    assert!(keys.windows(2).all(|v| v[0] < v[1]));
+    keys
+}
+
+fn base_lineage() -> Lineage {
+    Lineage {
+        version: 1,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 1,
+        revision: 1,
+        root: seed_key(0x30, 7),
+        identity: None,
+        devices: vec![seed_key(0x40, 3)],
+        delegates: Vec::new(),
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    }
+}
+
+fn signed_lineage(
+    version: u8,
+    root: (u8, u8),
+    devices: Vec<PublicKey>,
+    delegates: Vec<PublicKey>,
+) -> Lineage {
+    let root_key = seed_key(root.0, root.1);
+    let mut lineage = Lineage {
+        version,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 1,
+        revision: 1,
+        root: root_key,
+        identity: (version == 2).then_some(root_key),
+        devices,
+        delegates,
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    let bytes = lineage.signed_bytes().unwrap();
+    lineage.signature = sign_as(root.0, root.1, &bytes);
+    lineage.verify().unwrap();
+    lineage
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_zero_epoch_and_revision() {
+    let mut lineage = base_lineage();
+    lineage.epoch = 0;
+    assert!(lineage.signed_bytes().is_err());
+    lineage.epoch = 1;
+    lineage.revision = 0;
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_empty_devices() {
+    let mut lineage = base_lineage();
+    lineage.devices.clear();
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_too_many_devices() {
+    let mut lineage = base_lineage();
+    lineage.devices = sorted_keys(0x10, MAX_DEVICES + 1);
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_unsorted_or_duplicate_devices() {
+    let mut pair = vec![seed_key(0x40, 3), seed_key(0x40, 9)];
+    pair.sort();
+    pair.reverse();
+    assert!(pair[0] > pair[1]);
+    let mut lineage = base_lineage();
+    lineage.devices = pair;
+    assert!(lineage.signed_bytes().is_err());
+    let key = seed_key(0x40, 3);
+    lineage.devices = vec![key, key];
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_version_1_delegates() {
+    let mut lineage = base_lineage();
+    lineage.delegates = vec![seed_key(0x20, 3)];
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_too_many_delegates() {
+    let mut lineage = base_lineage();
+    lineage.version = 2;
+    lineage.identity = Some(lineage.root);
+    lineage.delegates = sorted_keys(0x20, MAX_DEVICES + 1);
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_unsorted_delegates() {
+    let mut pair = vec![seed_key(0x20, 3), seed_key(0x20, 9)];
+    pair.sort();
+    pair.reverse();
+    assert!(pair[0] > pair[1]);
+    let mut lineage = base_lineage();
+    lineage.version = 2;
+    lineage.identity = Some(lineage.root);
+    lineage.delegates = pair;
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_rejects_delegate_overlapping_devices() {
+    let mut lineage = base_lineage();
+    lineage.version = 2;
+    lineage.identity = Some(lineage.root);
+    lineage.delegates = lineage.devices.clone();
+    assert!(lineage.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_accepts_exactly_max_devices() {
+    let lineage = signed_lineage(1, (0x30, 7), sorted_keys(0x10, MAX_DEVICES), Vec::new());
+    assert_eq!(lineage.devices.len(), MAX_DEVICES);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn shape_accepts_exactly_max_delegates() {
+    let lineage = signed_lineage(
+        2,
+        (0x30, 7),
+        vec![seed_key(0x40, 3)],
+        sorted_keys(0x20, MAX_DEVICES),
+    );
+    assert_eq!(lineage.delegates.len(), MAX_DEVICES);
+}
+
+fn valid_request() -> PairingRequest {
+    PairingRequest {
+        version: 1,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        root: seed_key(0x30, 7),
+        epoch: 1,
+        device: seed_key(0x40, 3),
+        nonce: [9; 32],
+        issued_at: 1_000,
+        expires_at: 1_200,
+        proof: Signature::new(crate::VLD0, [0; 64]),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_signed_bytes_pins_domain() {
+    let bytes = valid_request().signed_bytes().unwrap();
+    assert!(!bytes.is_empty());
+    assert!(bytes.starts_with(b"ckmg.pairing.request.v1\0"));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_rejects_bad_version() {
+    let mut request = valid_request();
+    request.version = 2;
+    assert!(request.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_rejects_empty_or_inverted_window() {
+    let mut request = valid_request();
+    request.expires_at = request.issued_at;
+    assert!(request.signed_bytes().is_err());
+    request.expires_at = request.issued_at - 1;
+    assert!(request.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_rejects_window_over_five_minutes() {
+    let mut request = valid_request();
+    request.issued_at = 0;
+    request.expires_at = 301;
+    assert!(request.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_rejects_same_root_and_device() {
+    let mut request = valid_request();
+    request.device = request.root;
+    assert!(request.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_accepts_issuance_at_zero() {
+    let mut request = valid_request();
+    request.issued_at = 0;
+    request.expires_at = 100;
+    let bytes = request.signed_bytes().unwrap();
+    assert!(bytes.starts_with(b"ckmg.pairing.request.v1\0"));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_verify_enforces_window_edges() {
+    let mut request = valid_request();
+    let bytes = request.signed_bytes().unwrap();
+    request.proof = sign_as(0x40, 3, &bytes);
+    request.verify(request.issued_at).unwrap();
+    assert_eq!(
+        request.verify(request.issued_at - 1).unwrap_err(),
+        Error::Expired
+    );
+    assert_eq!(
+        request.verify(request.expires_at).unwrap_err(),
+        Error::Expired
+    );
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn request_digest_binds_the_proof() {
+    let request = valid_request();
+    let digest = request.digest().unwrap();
+    assert_ne!(digest, [0; 32]);
+    assert_ne!(digest, [1; 32]);
+    let mut other = request.clone();
+    let bytes = other.signed_bytes().unwrap();
+    other.proof = sign_as(0x40, 3, &bytes);
+    assert_ne!(request.digest().unwrap(), other.digest().unwrap());
+}
+
+fn valid_grant(version: u8) -> PairingGrant {
+    let request = valid_request();
+    let lineage = signed_lineage(1, (0x30, 7), vec![seed_key(0x40, 3)], Vec::new());
+    let sealed_len = match version {
+        2 => 5 + 32 + 64 + 16,
+        _ => 5 + 32 + 32 + 16,
+    };
+    PairingGrant {
+        version,
+        request,
+        lineage,
+        sealed_root: vec![0u8; sealed_len],
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn grant_version_defaults_to_legacy_transfer() {
+    let grant = valid_grant(1);
+    let request = serde_json::to_value(&grant.request).unwrap();
+    let lineage = serde_json::to_value(&grant.lineage).unwrap();
+    let signature = serde_json::to_value(grant.signature).unwrap();
+    let sealed_root = serde_json::to_value(&grant.sealed_root).unwrap();
+    let json = serde_json::json!({
+        "request": request,
+        "lineage": lineage,
+        "sealed_root": sealed_root,
+        "signature": signature,
+    });
+    assert!(json.get("version").is_none());
+    let decoded: PairingGrant = serde_json::from_value(json).unwrap();
+    assert_eq!(decoded.version, 1);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn grant_version_omitted_only_for_legacy_transfer() {
+    let encoded = serde_json::to_value(valid_grant(1)).unwrap();
+    assert!(encoded.get("version").is_none());
+    let encoded = serde_json::to_value(valid_grant(2)).unwrap();
+    assert_eq!(encoded.get("version").and_then(|v| v.as_u64()), Some(2));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn grant_aad_pins_version_domains() {
+    let aad = valid_grant(1).aad().unwrap();
+    assert!(aad.starts_with(b"ckmg.pairing.root.v2\0"));
+    let aad = valid_grant(2).aad().unwrap();
+    assert!(aad.starts_with(b"ckmg.pairing.root.v3\0"));
+    let aad = valid_grant(3).aad().unwrap();
+    assert!(aad.starts_with(b"ckmg.pairing.root.v4\0"));
+    assert!(valid_grant(9).aad().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn grant_signed_bytes_pins_version_domain() {
+    let bytes = valid_grant(1).signed_bytes().unwrap();
+    assert!(bytes.starts_with(b"ckmg.pairing.grant.v1\0"));
+    let bytes = valid_grant(2).signed_bytes().unwrap();
+    assert!(bytes.starts_with(b"ckmg.pairing.grant.v2\0"));
+}
+
+fn valid_rotation(version: u8) -> Rotation {
+    let mut devices = vec![seed_key(0x40, 3), seed_key(0x40, 9)];
+    devices.sort();
+    let lineage = signed_lineage(1, (0x30, 7), devices.clone(), Vec::new());
+    let sealed_len = if version == 2 {
+        5 + 32 + 64 + 16
+    } else {
+        5 + 32 + 32 + 16
+    };
+    let envelopes = devices
+        .iter()
+        .map(|device| RootEnvelope {
+            device: *device,
+            sealed_root: vec![0u8; sealed_len],
+        })
+        .collect();
+    Rotation {
+        version,
+        predecessor: [5; 32],
+        previous_root: seed_key(0x30, 8),
+        revoked: seed_key(0x40, 11),
+        lineage,
+        envelopes,
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_aad_pins_version_domains() {
+    let aad = valid_rotation(1).aad(seed_key(0x40, 3)).unwrap();
+    assert!(aad.starts_with(b"ckmg.rotation.root.v1\0"));
+    let aad = valid_rotation(2).aad(seed_key(0x40, 3)).unwrap();
+    assert!(aad.starts_with(b"ckmg.rotation.root.v2\0"));
+    let aad = valid_rotation(3).aad(seed_key(0x40, 3)).unwrap();
+    assert!(aad.starts_with(b"ckmg.rotation.root.v3\0"));
+    assert!(valid_rotation(9).aad(seed_key(0x40, 3)).is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_signed_bytes_pins_domain() {
+    let bytes = valid_rotation(1).signed_bytes().unwrap();
+    assert!(!bytes.is_empty());
+    assert!(bytes.starts_with(b"ckmg.rotation.v1\0"));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_rejects_envelope_count_mismatch() {
+    let mut rotation = valid_rotation(1);
+    rotation.envelopes.pop();
+    assert!(rotation.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_rejects_misdirected_envelope() {
+    let mut rotation = valid_rotation(1);
+    rotation.envelopes[1].device = seed_key(0x40, 11);
+    assert!(rotation.signed_bytes().is_err());
+}
+
+fn valid_rotation_many(version: u8, count: usize) -> Rotation {
+    let devices = sorted_keys(0x10, count);
+    let lineage = signed_lineage(1, (0x30, 7), devices.clone(), Vec::new());
+    let sealed_len = if version == 2 {
+        5 + 32 + 64 + 16
+    } else {
+        5 + 32 + 32 + 16
+    };
+    let envelopes = devices
+        .iter()
+        .map(|device| RootEnvelope {
+            device: *device,
+            sealed_root: vec![0u8; sealed_len],
+        })
+        .collect();
+    Rotation {
+        version,
+        predecessor: [5; 32],
+        previous_root: seed_key(0x30, 8),
+        revoked: seed_key(0x40, 11),
+        lineage,
+        envelopes,
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    }
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_rejects_too_many_envelopes() {
+    // Rotation::signed_bytes does not check the lineage shape, so the envelope
+    // bound is reachable with an over-long lineage built directly (a
+    // shape-valid lineage can never have more devices than MAX_DEVICES).
+    let devices = sorted_keys(0x10, MAX_DEVICES + 1);
+    let lineage = Lineage {
+        version: 1,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 1,
+        revision: 1,
+        root: seed_key(0x30, 7),
+        identity: None,
+        devices: devices.clone(),
+        delegates: Vec::new(),
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    let envelopes = devices
+        .iter()
+        .map(|device| RootEnvelope {
+            device: *device,
+            sealed_root: vec![0u8; 5 + 32 + 32 + 16],
+        })
+        .collect();
+    let rotation = Rotation {
+        version: 1,
+        predecessor: [5; 32],
+        previous_root: seed_key(0x30, 8),
+        revoked: seed_key(0x40, 11),
+        lineage,
+        envelopes,
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    assert_eq!(rotation.envelopes.len(), rotation.lineage.devices.len());
+    assert!(rotation.signed_bytes().is_err());
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_accepts_max_envelopes() {
+    let rotation = valid_rotation_many(1, MAX_DEVICES);
+    let bytes = rotation.signed_bytes().unwrap();
+    assert!(bytes.starts_with(b"ckmg.rotation.v1\0"));
+}
