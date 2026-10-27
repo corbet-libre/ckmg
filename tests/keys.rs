@@ -1845,3 +1845,358 @@ fn a_lineage_revision_for_another_head_is_refused_by_the_authority() {
         );
     });
 }
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn retained_checkpoint_refuses_tampered_stored_bytes() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 50);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let good = a.retained_checkpoint().await.unwrap();
+        assert!(good.len() > 40 && good.len() <= MAX_CHECKPOINT_BYTES);
+        let location = *store.0.borrow().records.keys().next().unwrap();
+        store.0.borrow_mut().records.get_mut(&location).unwrap()[40] ^= 1;
+        assert_eq!(a.retained_checkpoint().await.unwrap_err(), Error::Reconcile);
+        assert_eq!(a.state(), State::Reconcile);
+    });
+}
+
+// --- B: recording store for commit path selection ---
+
+#[derive(Clone, Default)]
+struct PathRecorder {
+    inner: Memory,
+    wrapped: std::rc::Rc<std::cell::Cell<bool>>,
+}
+impl SecureStore for PathRecorder {
+    async fn load(&mut self, location: &Locator) -> Result<Option<Vec<u8>>, Error> {
+        self.inner.load(location).await
+    }
+    async fn compare_exchange(
+        &mut self,
+        location: &Locator,
+        expected: Option<[u8; 32]>,
+        replacement: &[u8],
+    ) -> Result<Commit, Error> {
+        self.inner
+            .compare_exchange(location, expected, replacement)
+            .await
+    }
+    async fn compare_exchange_wrapped(
+        &mut self,
+        location: &Locator,
+        expected: Option<[u8; 32]>,
+        replacement: &[u8],
+        _cipher: &passkey::StoreCipher,
+    ) -> Result<Commit, Error> {
+        self.wrapped.set(true);
+        self.inner
+            .compare_exchange(location, expected, replacement)
+            .await
+    }
+}
+type RecordedMachine = Keys<PathRecorder, Time, Random, Guard>;
+async fn create_recorded(
+    machine: &mut RecordedMachine,
+    guard: &Guard,
+    p: &passkey::PrfOutput,
+    b: &Binding,
+) {
+    let receipt = machine
+        .create_scope(
+            p,
+            b.clone(),
+            info(),
+            &consent(Action::Create, b, None, 0, None, None),
+        )
+        .await
+        .unwrap();
+    guard.publish(&receipt);
+    machine.acknowledge(receipt.operation).await.unwrap();
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn commit_takes_the_wrapped_store_path_only_for_root_changes_and_rewraps() {
+    block_on(async {
+        let recorder = PathRecorder::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = Keys::new(
+            recorder.clone(),
+            time.clone(),
+            Random::new(51),
+            guard.clone(),
+        );
+        let b = binding("a");
+        create_recorded(&mut a, &guard, &prf(1), &b).await;
+        // A rename changes no root and requests no rewrap: plain compare-exchange.
+        recorder.wrapped.set(false);
+        a.rename_device("renamed").await.unwrap();
+        assert!(!recorder.wrapped.get());
+        // A compound rewrap with an unchanged root must still take the wrapped path.
+        recorder.wrapped.set(false);
+        a.migrate_compound_wrapping().await.unwrap();
+        assert!(recorder.wrapped.get());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn commit_takes_the_wrapped_store_path_for_a_rotation() {
+    block_on(async {
+        let recorder = PathRecorder::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = Keys::new(
+            recorder.clone(),
+            time.clone(),
+            Random::new(53),
+            guard.clone(),
+        );
+        let mut b = machine(&recorder.inner, &time, &guard, 54);
+        let bb = binding("a");
+        create_recorded(&mut a, &guard, &prf(1), &bb).await;
+        let anchor = a.lineage().await.unwrap();
+        let req = request(&mut b, &prf(2), &anchor).await;
+        let receipt = a
+            .authorize_device(
+                &req,
+                &consent(
+                    Action::Pair,
+                    &req.binding,
+                    Some(req.root),
+                    req.epoch,
+                    Some(req.device),
+                    Some(req.digest().unwrap()),
+                ),
+            )
+            .await
+            .unwrap();
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        let anchor = a.lineage().await.unwrap();
+        recorder.wrapped.set(false);
+        a.prepare_rotation(
+            req.device,
+            &consent(
+                Action::Rotate,
+                &anchor.binding,
+                Some(anchor.root),
+                anchor.epoch,
+                Some(req.device),
+                Some(anchor.digest().unwrap()),
+            ),
+        )
+        .await
+        .unwrap();
+        a.commit().await.unwrap().unwrap();
+        assert!(recorder.wrapped.get());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn acknowledge_clears_only_the_exact_pending_operation() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 55);
+        let ba = binding("a");
+        let receipt_a = a
+            .create_scope(
+                &prf(1),
+                ba.clone(),
+                info(),
+                &consent(Action::Create, &ba, None, 0, None, None),
+            )
+            .await
+            .unwrap();
+        guard.publish(&receipt_a);
+        let mut other = machine(&Memory::default(), &time, &guard, 56);
+        let bb = binding("b");
+        let receipt_b = other
+            .create_scope(
+                &prf(3),
+                bb.clone(),
+                info(),
+                &consent(Action::Create, &bb, None, 0, None, None),
+            )
+            .await
+            .unwrap();
+        assert_ne!(
+            receipt_a.operation.as_bytes(),
+            receipt_b.operation.as_bytes()
+        );
+        assert_eq!(
+            a.acknowledge(receipt_b.operation).await.unwrap_err(),
+            Error::Unauthorized
+        );
+        let pending = a.pending_output().await.unwrap().unwrap();
+        assert!(pending == receipt_a);
+        a.acknowledge(receipt_a.operation).await.unwrap();
+        assert!(a.pending_output().await.unwrap().is_none());
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn authorize_device_refuses_an_already_authorized_device() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 57);
+        let mut b = machine(&store, &time, &guard, 58);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let anchor = a.lineage().await.unwrap();
+        let req = request(&mut b, &prf(2), &anchor).await;
+        grant(&mut a, &guard, &req).await;
+        assert_eq!(
+            a.authorize_device(
+                &req,
+                &consent(
+                    Action::Pair,
+                    &req.binding,
+                    Some(req.root),
+                    req.epoch,
+                    Some(req.device),
+                    Some(req.digest().unwrap()),
+                ),
+            )
+            .await
+            .unwrap_err(),
+            Error::Unauthorized
+        );
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn adopt_lineage_refuses_the_current_revision() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 59);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let current = a.lineage().await.unwrap();
+        assert_eq!(
+            a.adopt_lineage(
+                &current,
+                &consent(
+                    Action::Adopt,
+                    &current.binding,
+                    Some(current.root),
+                    current.epoch,
+                    None,
+                    Some(current.digest().unwrap()),
+                ),
+            )
+            .await
+            .unwrap_err(),
+            Error::Unauthorized
+        );
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn prepare_rotation_refuses_removing_the_current_device() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 60);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let anchor = a.lineage().await.unwrap();
+        let me_ = a.device_public_key().await.unwrap();
+        assert!(anchor.devices.contains(&me_));
+        assert_eq!(
+            a.prepare_rotation(
+                me_,
+                &consent(
+                    Action::Rotate,
+                    &anchor.binding,
+                    Some(anchor.root),
+                    anchor.epoch,
+                    Some(me_),
+                    Some(anchor.digest().unwrap()),
+                ),
+            )
+            .await
+            .unwrap_err(),
+            Error::Unauthorized
+        );
+        assert_eq!(a.state(), State::Authorized);
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn signatures_enforce_the_exact_message_bound() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 61);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        let handle = a.key(purpose(Scope::Member, "records")).await.unwrap();
+        let exact = vec![7u8; MAX_MESSAGE_BYTES];
+        a.sign(&handle, &exact).await.unwrap();
+        a.sign_ed25519(&handle, &exact).await.unwrap();
+        let over = vec![7u8; MAX_MESSAGE_BYTES + 1];
+        assert_eq!(a.sign(&handle, &over).await.unwrap_err(), Error::Limit);
+        assert_eq!(
+            a.sign_ed25519(&handle, &over).await.unwrap_err(),
+            Error::Limit
+        );
+    });
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotated_restore_accepts_a_newer_authenticated_anchor() {
+    block_on(async {
+        let store = Memory::default();
+        let time = Time::default();
+        let guard = Guard::default();
+        let mut a = machine(&store, &time, &guard, 62);
+        let mut b = machine(&store, &time, &guard, 63);
+        let mut c = machine(&store, &time, &guard, 64);
+        let mut d = machine(&store, &time, &guard, 65);
+        create(&mut a, &guard, &prf(1), &binding("a")).await;
+        pair(&mut a, &mut b, &guard, &prf(2)).await;
+        let grant_c = pair(&mut a, &mut c, &guard, &prf(3)).await;
+        prepare(&mut a, grant_c.request.device).await;
+        let receipt = a.commit().await.unwrap().unwrap();
+        guard.publish(&receipt);
+        a.acknowledge(receipt.operation).await.unwrap();
+        let rotation = rotation(&receipt).clone();
+        // A later pairing moves the authenticated anchor past the rotation revision.
+        pair(&mut a, &mut d, &guard, &prf(4)).await;
+        let anchor = a.lineage().await.unwrap();
+        assert!(anchor.revision > rotation.lineage.revision);
+        assert_eq!(anchor.root, rotation.lineage.root);
+        assert_eq!(anchor.epoch, rotation.lineage.epoch);
+        let empty = Memory::default();
+        let mut survivor = machine(&empty, &time, &guard, 66);
+        let restored = survivor
+            .restore_scope(
+                &prf(2),
+                &anchor,
+                RestoreRoot::Rotated(&rotation),
+                info(),
+                &restore_consent(&anchor),
+            )
+            .await
+            .unwrap();
+        survivor.acknowledge(restored.operation).await.unwrap();
+        // The transfer delivers the root; the authenticated anchor is the lineage.
+        assert_eq!(survivor.lineage().await.unwrap(), anchor);
+    });
+}
