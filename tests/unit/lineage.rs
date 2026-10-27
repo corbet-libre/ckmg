@@ -524,3 +524,278 @@ fn rotation_accepts_max_envelopes() {
     let bytes = rotation.signed_bytes().unwrap();
     assert!(bytes.starts_with(b"ckmg.rotation.v1\0"));
 }
+
+// ---- Rotation::verify succession tests: each surviving mutant in verify
+// must make at least one of these fail. The fixtures below build an exact
+// succession (previous epoch 1/revision 1/root Rp/devices [A, B], next
+// epoch 2/revision 2/root Rn/devices [A], revoked B) with both lineages
+// signed and the rotation authorized by the previous root.
+
+fn resign_lineage(lineage: &mut Lineage, first: u8, second: u8) {
+    let bytes = lineage.signed_bytes().unwrap();
+    lineage.signature = sign_as(first, second, &bytes);
+}
+
+fn resign_rotation(rotation: &mut Rotation, first: u8, second: u8) {
+    let bytes = rotation.signed_bytes().unwrap();
+    rotation.signature = sign_as(first, second, &bytes);
+}
+
+fn verify_pair_v1() -> (Lineage, Rotation) {
+    let mut devices = vec![seed_key(0x40, 3), seed_key(0x40, 9)];
+    devices.sort();
+    let mut previous = Lineage {
+        version: 1,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 1,
+        revision: 1,
+        root: seed_key(0x30, 7),
+        identity: None,
+        devices: devices.clone(),
+        delegates: Vec::new(),
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_lineage(&mut previous, 0x30, 7);
+    previous.verify().unwrap();
+    let mut next = Lineage {
+        version: 1,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 2,
+        revision: 2,
+        root: seed_key(0x30, 8),
+        identity: None,
+        devices: vec![devices[0]],
+        delegates: Vec::new(),
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_lineage(&mut next, 0x30, 8);
+    next.verify().unwrap();
+    let mut rotation = Rotation {
+        version: 1,
+        predecessor: previous.digest().unwrap(),
+        previous_root: seed_key(0x30, 7),
+        revoked: devices[1],
+        lineage: next,
+        envelopes: vec![RootEnvelope {
+            device: devices[0],
+            sealed_root: vec![0u8; 5 + 32 + 32 + 16],
+        }],
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_rotation(&mut rotation, 0x30, 7);
+    rotation.verify(&previous).unwrap();
+    (previous, rotation)
+}
+
+fn verify_pair_v2_delegate_revoked() -> (Lineage, Rotation) {
+    let device = seed_key(0x40, 3);
+    let delegate = seed_key(0x20, 5);
+    let mut previous = Lineage {
+        version: 2,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 1,
+        revision: 1,
+        root: seed_key(0x30, 7),
+        identity: Some(seed_key(0x30, 7)),
+        devices: vec![device],
+        delegates: vec![delegate],
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_lineage(&mut previous, 0x30, 7);
+    previous.verify().unwrap();
+    let mut next = Lineage {
+        version: 2,
+        binding: Binding::new("mut-community", "mut-member").unwrap(),
+        epoch: 2,
+        revision: 2,
+        root: seed_key(0x30, 8),
+        identity: Some(seed_key(0x30, 7)),
+        devices: vec![device],
+        delegates: Vec::new(),
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_lineage(&mut next, 0x30, 8);
+    next.verify().unwrap();
+    let mut rotation = Rotation {
+        version: 2,
+        predecessor: previous.digest().unwrap(),
+        previous_root: seed_key(0x30, 7),
+        revoked: delegate,
+        lineage: next,
+        envelopes: vec![RootEnvelope {
+            device,
+            sealed_root: vec![0u8; 5 + 32 + 64 + 16],
+        }],
+        signature: Signature::new(crate::VLD0, [0; 64]),
+    };
+    resign_rotation(&mut rotation, 0x30, 7);
+    rotation.verify(&previous).unwrap();
+    (previous, rotation)
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_accepts_exact_succession() {
+    let (previous, rotation) = verify_pair_v1();
+    assert_eq!(rotation.verify(&previous), Ok(()));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_accepts_delegate_revocation() {
+    let (previous, rotation) = verify_pair_v2_delegate_revoked();
+    assert_eq!(rotation.verify(&previous), Ok(()));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_identity_change_alone() {
+    let (previous, mut rotation) = verify_pair_v2_delegate_revoked();
+    rotation.lineage.identity = Some(seed_key(0x50, 1));
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_wrong_predecessor() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.predecessor = [9; 32];
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_wrong_previous_root() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.previous_root = seed_key(0x50, 1);
+    resign_rotation(&mut rotation, 0x50, 1);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_binding_change() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.lineage.binding = Binding::new("other-community", "mut-member").unwrap();
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_same_root() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.lineage.root = seed_key(0x30, 7);
+    resign_lineage(&mut rotation.lineage, 0x30, 7);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_stale_epoch() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.lineage.epoch = 1;
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_stale_revision() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.lineage.revision = 1;
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_foreign_revoked() {
+    let (previous, mut rotation) = verify_pair_v1();
+    rotation.revoked = seed_key(0x50, 2);
+    // Keep the full previous device set (with matching envelopes) so that the
+    // revoked-membership clause alone fires: the devices clause sees
+    // lineage.devices == remaining because the foreign key removed nothing.
+    let mut devices = rotation.lineage.devices.clone();
+    devices.push(previous.devices[1]);
+    devices.sort();
+    rotation.envelopes.push(RootEnvelope {
+        device: previous.devices[1],
+        sealed_root: vec![0u8; 5 + 32 + 32 + 16],
+    });
+    rotation.envelopes.sort_by(|a, b| a.device.cmp(&b.device));
+    rotation.lineage.devices = devices;
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_device_set_mismatch() {
+    let (previous, mut rotation) = verify_pair_v1();
+    let mut devices = rotation.lineage.devices.clone();
+    devices.push(rotation.revoked);
+    devices.sort();
+    rotation.envelopes.push(RootEnvelope {
+        device: rotation.revoked,
+        sealed_root: vec![0u8; 5 + 32 + 32 + 16],
+    });
+    rotation.envelopes.sort_by(|a, b| a.device.cmp(&b.device));
+    rotation.lineage.devices = devices;
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_verify_rejects_delegate_set_mismatch() {
+    let (previous, mut rotation) = verify_pair_v2_delegate_revoked();
+    rotation.lineage.delegates = vec![rotation.revoked];
+    resign_lineage(&mut rotation.lineage, 0x30, 8);
+    resign_rotation(&mut rotation, 0x30, 7);
+    assert_eq!(rotation.verify(&previous), Err(Error::Unauthorized));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_signed_bytes_v2_pins_domain() {
+    let bytes = valid_rotation(2).signed_bytes().unwrap();
+    assert!(bytes.starts_with(b"ckmg.rotation.v2\0"));
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn rotation_rejects_bad_sealed_root_length() {
+    let mut rotation = valid_rotation(1);
+    rotation.envelopes[0].sealed_root = vec![0u8; 10];
+    assert!(rotation.signed_bytes().is_err());
+}
+
+// ---- encode bound tests: the MAX_MESSAGE_BYTES limit must accept exactly
+// MAX_MESSAGE_BYTES and refuse anything longer.
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn encode_accepts_exactly_max_message_bytes() {
+    let domain = b"ckmg.test.exact.v1\0";
+    let pad = MAX_MESSAGE_BYTES - domain.len() - 2;
+    let bytes = encode(domain, &"a".repeat(pad)).unwrap();
+    assert_eq!(bytes.len(), MAX_MESSAGE_BYTES);
+}
+
+#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+#[cfg_attr(not(target_arch = "wasm32"), test)]
+fn encode_rejects_over_max_message_bytes() {
+    let domain = b"ckmg.test.exact.v1\0";
+    let pad = MAX_MESSAGE_BYTES - domain.len() - 2 + 1;
+    assert_eq!(encode(domain, &"a".repeat(pad)).unwrap_err(), Error::Limit);
+}
