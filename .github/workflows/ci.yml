@@ -277,12 +277,4 @@ jobs:
             wasm-coverage.txt
 
 'on':
-  push:
-    branches:
-    - main
-    paths-ignore:
-    - '**.md'
-    - LICENSE
-    - LICENSES/**
-  pull_request: null
-  workflow_dispatch: null
+  workflow_dispatch:
