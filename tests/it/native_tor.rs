@@ -1,10 +1,9 @@
 //! Original Keys and actual stopped Arti construction. The signed fixture
 //! Authority below is test-only; this does not claim server G3 or live Tor.
 #![cfg(all(feature = "native-tor", not(target_arch = "wasm32")))]
-mod support;
+use crate::support::*;
 use ckmg::*;
 use std::{cell::Cell, path::Path, rc::Rc, sync::Arc};
-use support::*;
 
 fn initialize(
     initializer: NativeTorInitializer,

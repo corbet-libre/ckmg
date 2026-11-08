@@ -1,8 +1,7 @@
 //! The device key that appears in MLS leaf credentials is scope-bound: the same
 //! passkey in two communities never yields the same public key.
-mod support;
+use crate::support::*;
 use ckmg::*;
-use support::*;
 
 #[test]
 fn device_public_key_differs_per_community_and_is_stable_within_one() {

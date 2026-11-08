@@ -1,10 +1,9 @@
 //! Original Keys/Envelope crypto and durable checkpoints, with test-only lineage
 //! fixtures. These vectors do not claim production active-passkey G3.
 #![cfg(feature = "profile-envelope")]
-mod support;
+use crate::support::*;
 use ckmg::{envelope as cnvl, *};
 use futures::executor::block_on;
-use support::*;
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);
 fn context() -> cnvl::Context {

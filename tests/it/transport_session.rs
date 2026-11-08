@@ -1,13 +1,12 @@
 //! Independent [`TransportSession`] custody: fixed UseTransport(Vld0) shape,
 //! fresh authority per use, fail-closed wipe, and stable node keys.
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::{FutureExt, executor::block_on};
 use std::{
     cell::{Cell, RefCell},
     rc::Rc,
 };
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

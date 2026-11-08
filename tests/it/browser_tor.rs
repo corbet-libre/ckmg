@@ -2,12 +2,11 @@
 //! seam. The signed fixture Authority is not production G3, Tor or Snowflake.
 #![cfg(all(feature = "browser-tor", target_arch = "wasm32"))]
 
-mod support;
+use crate::support::*;
 use ckmg::*;
 use ed25519_dalek::SigningKey;
 use js_sys::{Function, Uint8Array};
 use std::sync::Arc;
-use support::*;
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_test::wasm_bindgen_test;
 use zeroize::Zeroizing;

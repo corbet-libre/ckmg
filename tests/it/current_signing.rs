@@ -1,6 +1,6 @@
 //! Original Keys/intent/store adversaries; the owner is a strict test fixture,
 //! not production HTTPS or Charter qualification.
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::{
     FutureExt,
@@ -8,7 +8,6 @@ use futures::{
     lock::{Mutex, OwnedMutexGuard},
 };
 use std::{cell::Cell, rc::Rc, sync::Arc};
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

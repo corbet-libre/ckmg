@@ -2,11 +2,10 @@
 //! Decided 2026-10-27 (custody review): a transient authority outcome ("could not
 //! check": `Unavailable`) refuses that one call but never locks the keys; only a
 //! genuine denial locks, and that lock stays.
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::executor::block_on;
 use std::{cell::Cell, rc::Rc};
-use support::*;
 
 /// The shared test authority, except that it answers its next check with `next`.
 #[derive(Clone)]

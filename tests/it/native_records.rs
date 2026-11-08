@@ -1,11 +1,10 @@
 //! Actual native core consumes only record-purpose initializers made inside Keys.
 //! Existing Authority fixture is not claimed as real server G3 or remote restore.
 #![cfg(all(feature = "native-records", not(target_arch = "wasm32")))]
-mod support;
+use crate::support::*;
 use ckmg::*;
 use cvln::{Limits, Node, Publication, core::VeilidConfig};
 use std::{num::NonZeroUsize, time::Duration};
-use support::*;
 
 #[tokio::test]
 async fn passkey_record_reopens_with_exact_read_custody_and_separates_scopes() {

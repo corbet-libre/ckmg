@@ -1,11 +1,10 @@
 //! Real Keys/root signatures and one-use intent under a strict test-only owner.
 //! This file does not qualify the HTTPS/Charter or account issuer composition.
-mod support;
+use crate::support::*;
 use ckmg::*;
 use data_encoding::BASE64URL_NOPAD as B64;
 use futures::{FutureExt, executor::block_on};
 use std::{cell::Cell, rc::Rc};
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

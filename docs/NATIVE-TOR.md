@@ -22,7 +22,7 @@ The runtime must still close Mesh and enforce current authority on every domain
 operation. A running anonymous transport does not grant membership, G2/G3,
 Records availability, message acceptance or delivery.
 
-`tests/native_tor.rs` covers actual stopped Arti construction and original Keys
+`tests/it/native_tor.rs` covers actual stopped Arti construction and original Keys
 refusals with the existing signed test-only Authority. Unit tests compare the
 maintained Arti public key to the original Keys purpose public key and exercise
 scope/invalidation. They are not production Authority or live-network evidence.

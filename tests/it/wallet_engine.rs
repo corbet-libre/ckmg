@@ -1,10 +1,9 @@
 //! Original uninitialized engine custody only. No accepted balance, proof or
 //! Wave release is manufactured by the test-only lineage authority fixture.
 #![cfg(feature = "wallet-engine")]
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::executor::block_on;
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

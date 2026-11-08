@@ -1,10 +1,9 @@
 //! X3 H2, M2 and M3: every device-key signature is typed. A signer signs a message only if
 //! it is led by one `DeviceFormat` tag that the signer's class allows; reserved purposes
 //! stay internal; Profile custody never receives the device scalar.
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::executor::block_on;
-use support::*;
 
 /// The stamp-salt tag (crate-private in ckmg): no signer may accept it.
 const SALT_TAG: &[u8] = b"cmsg.device-join.salt.v1\0";

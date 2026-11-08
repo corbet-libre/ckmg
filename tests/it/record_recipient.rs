@@ -1,7 +1,7 @@
 //! Original Keys/pairing/rotation with scoped test-only current owner checks.
 //! This does not qualify production HTTPS admission or initialized account proof.
 #![cfg(feature = "wallet-engine")]
-mod support;
+use crate::support::*;
 use ckmg::*;
 use futures::{
     FutureExt,
@@ -14,7 +14,6 @@ use std::{
     sync::Arc,
     task::{Poll, Waker},
 };
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

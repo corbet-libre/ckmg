@@ -1,11 +1,10 @@
 //! Fresh-authorized opaque initialization of the real holder engine; Wallet owns its lifetime.
 #![cfg(feature = "passport")]
-mod support;
 
+use crate::support::*;
 use ckmg::*;
 use cpsd::rand::{SeedableRng, rngs::StdRng};
 use futures::executor::block_on;
-use support::*;
 
 #[cfg(target_arch = "wasm32")]
 wasm_bindgen_test::wasm_bindgen_test_configure!(run_in_browser);

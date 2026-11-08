@@ -2,11 +2,10 @@
 //! the Keys checkpoint. The owner is a strict test fixture, not the production HTTPS
 //! or Charter qualification.
 #![cfg(feature = "wallet-engine")]
-mod support;
+use crate::support::*;
 use ckmg::wallet_engine::{account::verify_prehash, account_key::SealedAccountKey};
 use ckmg::*;
 use futures::executor::block_on;
-use support::*;
 
 const ORIGIN: &str = "https://garden.example.com";
 const SLOT: [u8; 32] = [5; 32];
