@@ -42,7 +42,7 @@ browser-tor = ["dep:ctrn", "dep:js-sys", "dep:wasm-bindgen"]
 [dependencies]
 cdht = { git = "https://git.corbet.ch/corbet-libre/cdht.git", branch = "main" }
 cnvl = { git = "https://git.corbet.ch/corbet-libre/cnvl.git", branch = "main", optional = true }
-cwlt-engine = { git = "https://git.corbet.ch/corbet-foss/cwlt.git", branch = "main", optional = true }
+cwlt-engine = { git = "https://git.corbet.ch/corbet-libre/cwlt.git", branch = "main", optional = true }
 cpsd = { git = "https://git.corbet.ch/corbet-libre/cpsd.git", branch = "main", default-features = false, optional = true }
 # The crypto crates Veilid's VLD0 cryptosystem uses, at the versions Veilid uses.
 ed25519-dalek = { version = "3.0.0", features = ["digest", "zeroize"] }
@@ -66,13 +66,13 @@ schemars = "1"
 getrandom = { version = "0.4", features = ["wasm_js"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ctrn = { git = "https://git.corbet.ch/corbet-foss/ctrn.git", branch = "main", default-features = false, optional = true }
+ctrn = { git = "https://git.corbet.ch/corbet-libre/ctrn.git", branch = "main", default-features = false, optional = true }
 js-sys = { version = "0.3", optional = true }
 wasm-bindgen = { version = "0.2", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-cvln = { git = "https://git.corbet.ch/corbet-foss/cvln.git", branch = "main", optional = true }
-ctrn = { git = "https://git.corbet.ch/corbet-foss/ctrn.git", branch = "main", optional = true }
+cvln = { git = "https://git.corbet.ch/corbet-libre/cvln.git", branch = "main", optional = true }
+ctrn = { git = "https://git.corbet.ch/corbet-libre/ctrn.git", branch = "main", optional = true }
 arti-client = { version = "0.46", default-features = false, optional = true }
 tor-hscrypto = { version = "0.46", default-features = false, optional = true }
 tor-llcrypto = { version = "0.46", default-features = false, optional = true }
