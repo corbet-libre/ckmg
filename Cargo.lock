@@ -60,7 +60,7 @@ version = "1.0.0-beta.26"
 source = "git+https://github.com/noir-lang/noir?tag=v1.0.0-beta.26#40d6574f851d926f93e0c3a271bac3e6e82ac905"
 dependencies = [
  "acir",
- "aes 0.9.2",
+ "aes 0.9.4",
  "blake2 0.11.0",
  "blake3",
  "cbc 0.2.1",
@@ -68,7 +68,7 @@ dependencies = [
  "keccak 0.2.2",
  "log",
  "p256 0.14.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
 ]
 
@@ -111,9 +111,9 @@ dependencies = [
 
 [[package]]
 name = "aes"
-version = "0.9.2"
+version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8eb277bec05f56a0e0591f155a484cbd0f4f07ff2905051a48c72f004f7ed58"
+checksum = "fc0fc36d7440d015b45468ba08a21e80e056ebbd014c611c6298bb7503e04bd1"
 dependencies = [
  "cipher 0.5.2",
  "cpubits",
@@ -1452,7 +1452,7 @@ dependencies = [
  "schemars 1.2.3",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "tempfile",
  "tokio",
  "tor-hscrypto",
@@ -1676,7 +1676,7 @@ version = "0.0.0"
 source = "git+https://git.corbet.ch/corbet-libre/cpns.git?branch=main#ca0c981029a26148cd930ffd39fe5be2f842173a"
 dependencies = [
  "getrandom 0.4.3",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "subtle",
  "zeroize",
 ]
@@ -1734,7 +1734,7 @@ name = "crbk"
 version = "0.0.0"
 source = "git+https://git.corbet.ch/corbet-libre/crbk.git?branch=main#e60ba0cec606690beca5525c85c234cfd5ecdad2"
 dependencies = [
- "czkp 0.0.0 (git+https://git.corbet.ch/corbet-libre/czkp.git?branch=main)",
+ "czkp",
  "semver",
  "serde",
  "serde_json",
@@ -1813,9 +1813,9 @@ dependencies = [
 
 [[package]]
 name = "crypto-bigint"
-version = "0.7.10"
+version = "0.7.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c035cb64cba03dad2fb921f3e218785e8cf9a41790da5eb3a1400f62fa2be11"
+checksum = "914c195c4d7fbc5ed7f88d14cbf85914d5c664967658d43404b263913a477e82"
 dependencies = [
  "cpubits",
  "ctutils",
@@ -1857,7 +1857,7 @@ dependencies = [
  "coset",
  "ed25519-dalek 3.0.0",
  "rand_core 0.10.1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "zeroize",
 ]
 
@@ -1896,7 +1896,7 @@ dependencies = [
 [[package]]
 name = "ctrn"
 version = "0.1.0"
-source = "git+https://git.corbet.ch/corbet-libre/ctrn.git?branch=main#28468605de2b618634d96e044a9278f53865eae3"
+source = "git+https://git.corbet.ch/corbet-libre/ctrn.git?branch=main#afa3908c9653235ac7f156813056f22a8741ca30"
 dependencies = [
  "arti-client",
  "async-trait",
@@ -1983,7 +1983,7 @@ dependencies = [
 [[package]]
 name = "cvch"
 version = "0.2.1"
-source = "git+https://git.corbet.ch/corbet-libre/cvch.git?branch=main#4759cbcb7c8cf43e55d264697560e6d44bd2ba2f"
+source = "git+https://git.corbet.ch/corbet-libre/cvch.git?branch=main#e2a915fa2de172a831266f233dba4f8347acee21"
 dependencies = [
  "cfbk",
  "csgn",
@@ -1994,7 +1994,7 @@ dependencies = [
  "hpke",
  "serde",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "zeroize",
 ]
@@ -2002,7 +2002,7 @@ dependencies = [
 [[package]]
 name = "cvln"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-libre/cvln.git?branch=main#0413e45b86a86dee16cdc9e5aa5c3b379a4f347e"
+source = "git+https://git.corbet.ch/corbet-libre/cvln.git?branch=main#0bb3912c71f7ab8bb46145bdaac7e67abf891ef4"
 dependencies = [
  "flume",
  "parking_lot",
@@ -2013,13 +2013,13 @@ dependencies = [
 [[package]]
 name = "cwlt-engine"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-libre/cwlt.git?branch=main#7aae6fc97e6891f2cefa2a435abe933b125770c1"
+source = "git+https://git.corbet.ch/corbet-libre/cwlt.git?branch=main#50b60212286b78638802e352c4ae4cc1f1a7a86d"
 dependencies = [
  "acvm",
  "barretenberg-rs",
  "bn254_blackbox_solver",
  "chacha20poly1305",
- "czkp 0.0.0 (git+https://git.corbet.ch/corbet-foss/czkp.git?branch=main)",
+ "czkp",
  "data-encoding",
  "ed25519-dalek 3.0.0",
  "flate2",
@@ -2039,7 +2039,7 @@ dependencies = [
 [[package]]
 name = "czkp"
 version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-foss/czkp.git?branch=main#a43c1a5a119df7700974fb6df5209a7e229d0cbf"
+source = "git+https://git.corbet.ch/corbet-libre/czkp.git?branch=main#ebf2ef7e376c6e350d501a5c6f21a3f6150f126b"
 dependencies = [
  "ark-bn254",
  "ark-ff 0.6.0",
@@ -2049,23 +2049,7 @@ dependencies = [
  "pso-poseidon",
  "rs_merkle",
  "serde",
- "sha2 0.11.0",
-]
-
-[[package]]
-name = "czkp"
-version = "0.0.0"
-source = "git+https://git.corbet.ch/corbet-libre/czkp.git?branch=main#c89b7b5d035aa9db1186bdce6d7f5200e3c01982"
-dependencies = [
- "ark-bn254",
- "ark-ff 0.6.0",
- "data-encoding",
- "ed25519-dalek 3.0.0",
- "p256 0.13.2",
- "pso-poseidon",
- "rs_merkle",
- "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -2347,7 +2331,7 @@ checksum = "ba91f619216e76a5eb2515783f7ec2e271938b51aadac592f4930517f4626863"
 dependencies = [
  "heck",
  "indexmap 2.14.2",
- "itertools 0.10.5",
+ "itertools 0.15.0",
  "proc-macro-crate",
  "proc-macro2",
  "quote",
@@ -2621,7 +2605,7 @@ dependencies = [
  "ed25519 3.0.0",
  "rand_core 0.10.1",
  "serde",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signature 3.0.0",
  "subtle",
  "zeroize",
@@ -2683,7 +2667,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "900f37e7e18d74a2347389af6cd69e3a30d5cc9e697f40004865679aa75e9c7c"
 dependencies = [
  "base16ct 1.0.0",
- "crypto-bigint 0.7.10",
+ "crypto-bigint 0.7.11",
  "crypto-common 0.2.2",
  "digest 0.11.3",
  "ff 0.14.0",
@@ -2948,9 +2932,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aedcfb3409746eddb02b9e19ebda1c3394f759a152e48ee875a0844d1b955484"
+checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "finl_unicode"
@@ -3301,9 +3285,9 @@ dependencies = [
 
 [[package]]
 name = "gloo-timers"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bbb143cf96099802033e0d4f4963b19fd2e0b728bcf076cd9cf7f6634f092994"
+checksum = "482ce8a491a501da4cd806bd190275363d674f2845005c6ddbd5d3e1dd54495d"
 dependencies = [
  "futures-channel",
  "futures-core",
@@ -3488,7 +3472,7 @@ dependencies = [
  "hkdf 0.13.0",
  "hybrid-array",
  "rand_core 0.10.1",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "subtle",
  "x25519-dalek 3.0.0",
  "zeroize",
@@ -4114,7 +4098,7 @@ dependencies = [
  "ecdsa 0.17.0",
  "elliptic-curve 0.14.3",
  "primeorder 0.14.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "signature 3.0.0",
  "wnaf",
 ]
@@ -5182,7 +5166,7 @@ dependencies = [
  "elliptic-curve 0.14.3",
  "primefield",
  "primeorder 0.14.0",
- "sha2 0.11.0",
+ "sha2 0.11.1",
 ]
 
 [[package]]
@@ -5552,7 +5536,7 @@ version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c555a6e4eb7d4e158fcb028c835c3b8642206ddc279b5c6b202ef9a8bdb592f4"
 dependencies = [
- "crypto-bigint 0.7.10",
+ "crypto-bigint 0.7.11",
  "crypto-common 0.2.2",
  "ff 0.14.0",
  "rand_core 0.10.1",
@@ -5968,7 +5952,7 @@ version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4a459cddafb3fe76b31fd8f1108007566c40301feb64dc7b54656eb7388172b"
 dependencies = [
- "crypto-bigint 0.7.10",
+ "crypto-bigint 0.7.11",
  "hmac 0.13.0",
 ]
 
@@ -6128,7 +6112,7 @@ version = "8.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0d84e8ba78bd384263e5922f084cbe1b081c3b7e69add59c8fb097b879ba968a"
 dependencies = [
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "walkdir",
 ]
 
@@ -6706,9 +6690,9 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.11.0"
+version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
+checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
 dependencies = [
  "cfg-if",
  "cpufeatures 0.3.1",
@@ -7143,7 +7127,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.3",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.52.0",
@@ -8109,7 +8093,7 @@ version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4fee81755528eb34f8352ca6987d5f5c66ebba6af2e4618da4b527f17b0e912e"
 dependencies = [
- "aes 0.9.2",
+ "aes 0.9.4",
  "base64ct",
  "ctr",
  "curve25519-dalek 4.1.3",
@@ -8328,7 +8312,7 @@ version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ddf767335ae2e255025536d48384b92c6b4b8557e5b345be600e7ca2de1c880"
 dependencies = [
- "aes 0.9.2",
+ "aes 0.9.4",
  "amplify",
  "async-trait",
  "asynchronous-codec",
@@ -8851,7 +8835,7 @@ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 [[package]]
 name = "veilid-core"
 version = "0.5.8"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#759da70be95497cfaa2e0bb8c122b16c8cac449e"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#cf45056c3aefee43d9fe12ddaddb74a1a512b023"
 dependencies = [
  "arc-swap",
  "async-trait",
@@ -8890,7 +8874,7 @@ dependencies = [
  "serde_bytes",
  "serde_ignored",
  "serde_json",
- "sha2 0.11.0",
+ "sha2 0.11.1",
  "thiserror 2.0.21",
  "tokio",
  "tracing",
@@ -8911,7 +8895,7 @@ dependencies = [
 [[package]]
 name = "veilid-core-optimized"
 version = "0.5.8"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#759da70be95497cfaa2e0bb8c122b16c8cac449e"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#cf45056c3aefee43d9fe12ddaddb74a1a512b023"
 dependencies = [
  "argon2",
  "blake2 0.11.0",
@@ -8940,7 +8924,7 @@ dependencies = [
 [[package]]
 name = "veilid-tools"
 version = "0.5.8"
-source = "git+https://gitlab.com/veilid/veilid.git?branch=main#759da70be95497cfaa2e0bb8c122b16c8cac449e"
+source = "git+https://gitlab.com/veilid/veilid.git?branch=main#cf45056c3aefee43d9fe12ddaddb74a1a512b023"
 dependencies = [
  "android_logger",
  "async-lock",
